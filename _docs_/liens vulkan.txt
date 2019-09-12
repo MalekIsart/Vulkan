@@ -1,0 +1,34 @@
+
+tutoriaux:
+https://renderdoc.org/vulkan-in-30-minutes.html
+https://vulkan.lunarg.com/doc/sdk/1.1.114.0/windows/getting_started.html
+https://vulkan-tutorial.com/
+https://www.saschawillems.de/tags/vulkan-tutorial/
+https://github.com/SaschaWillems/Vulkan
+https://software.intel.com/en-us/articles/api-without-secrets-introduction-to-vulkan-part-1
+https://developer.samsung.com/game/usage
+
+command buffer:
+https://www.khronos.org/assets/uploads/developers/library/2016-vulkan-devday-uk/6-Vulkan-subpasses.pdf
+https://arm-software.github.io/vulkan_best_practice_for_mobile_developers/samples/advanced/command_buffer_usage/command_buffer_usage_tutorial.html
+
+swapchain:
+https://web.archive.org/web/20180203060107/https://timothylottes.github.io/20180202.html
+https://program.developer.samsung.com/2019/07/26/vulkan-mobile-best-practice-how-to-configure-your-vulkan-swapchain/
+
+synchro:
+https://github.com/KhronosGroup/Vulkan-Docs/wiki/Synchronization-Examples
+http://themaister.net/blog/2019/08/14/yet-another-blog-explaining-vulkan-synchronization/
+
+renderpass:
+https://arm-software.github.io/vulkan_best_practice_for_mobile_developers/samples/advanced/render_passes/render_passes_tutorial.html
+https://www.khronos.org/assets/uploads/developers/library/2018-vulkan-devday/02-RenderPass-Subpass.pdf
+
+libs & outils:
+https://github.com/zeux/volk
+https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/
+https://renderdoc.org/
+
+implementations:
+vkDoom3 https://www.fasterthan.life/blog
+
