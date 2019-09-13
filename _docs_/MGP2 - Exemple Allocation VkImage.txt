@@ -1,0 +1,100 @@
+std::vector<VkMemoryPropertyFlags> memoryFlags;
+
+[...]
+
+VkPhysicalDeviceMemoryProperties memoryProperties;
+vkGetPhysicalDeviceMemoryProperties(gpu, &memoryProperties);
+
+memoryFlags.reserve(memoryProperties.memoryTypeCount);
+for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; i++)
+	memoryFlags.push_back(memoryProperties.memoryTypes[i].propertyFlags);
+
+
+uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
+    int i = 0;
+    for (auto propertyFlags : memoryFlags) {
+        if ((typeFilter & (1 << i)) && (propertyFlags & properties) == properties) {
+            return i;
+        }
+        i++;
+    }
+    
+    std::cout << "failed to find suitable memory type!" << std::endl;
+    return 0;
+}
+
+// findMemoryType() s'utilise par exemple ainsi
+
+VkMemoryRequirements memRequirements;
+vkGetImageMemoryRequirements(context.device, image, &memRequirements);
+// memRequirements contient le(s) "memory type" requis afin de stocker correctement notre image 		
+//VkMemoryAllocateInfo allocInfo = {};
+//allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+//allocInfo.allocationSize = memRequirements.size;
+//allocInfo.memoryTypeIndex = context.findMemoryType(memRequirements.memoryTypeBits, properties);
+
+// Code Sample 1
+// Creation d'une RenderTarget
+
+struct VKRenderTarget
+{
+    VkImage image;
+    VkImageView imageView;
+    VkDeviceMemory imageMemory;
+    VkFormat imageFormat;
+	
+	bool VKRenderTarget::create(VulkanContext& context, uint32_t width, uint32_t height, VkFormat format
+								, uint32_t sampleCount, VkImageUsageFlags attachment, VkImageAspectFlags aspectFlags);
+};
+
+bool VKRenderTarget::create(VulkanContext& context, uint32_t width, uint32_t height, VkFormat format
+							, uint32_t sampleCount, VkImageUsageFlags attachment, VkImageAspectFlags aspectFlags)
+{
+    //context.createImage2D(1, width, height, 1, format, attachment, &image, &imageMemory, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    
+    VkImageCreateInfo imageInfo = {};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.flags = 0;
+    imageInfo.extent.width = width;
+    imageInfo.extent.height = height;
+    imageInfo.extent.depth = 1; // <- 3D
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = format;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage = attachment | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+    imageInfo.samples = (VkSampleCountFlagBits)sampleCount;//VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    
+    if (vkCreateImage(context.device, &imageInfo, nullptr, &image) != VK_SUCCESS) {
+        std::cout << "error: failed to create render target image!" << std::endl;
+        return false;
+    }
+    
+    {
+        VkMemoryRequirements memRequirements;
+        vkGetImageMemoryRequirements(context.device, image, &memRequirements);
+        
+        VkMemoryAllocateInfo allocInfo = {};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memRequirements.size;
+        VkMemoryPropertyFlags properties = VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT;
+        allocInfo.memoryTypeIndex = context.findMemoryType(memRequirements.memoryTypeBits, properties);
+        if (allocInfo.memoryTypeIndex == ~0UI) {
+            properties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+            allocInfo.memoryTypeIndex = context.findMemoryType(memRequirements.memoryTypeBits, properties);
+        }
+        if (vkAllocateMemory(context.device, &allocInfo, nullptr, &imageMemory) != VK_SUCCESS) {
+            std::cout << "error: failed to allocate render target image memory!" << std::endl;
+            return false;
+        }
+        
+        if (vkBindImageMemory(context.device, image, imageMemory, 0) != VK_SUCCESS) {
+            std::cout << "error: failed to bind render target image memory!" << std::endl;
+            return false;
+        }
+    }
+    
+    // ensuite créer l'image view etc...
