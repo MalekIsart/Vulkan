@@ -1,0 +1,50 @@
+
+// creation d'un Pool pour 4 Uniform Buffers, 8 textures et 4 input attachments
+
+std::vector<VkDescriptorPoolSize> scene_descriptor_pool_sizes = {
+	{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4 },
+	{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8 },
+	{ VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 4 }   // VkDescriptorType type, uint32_t descriptorCount
+};
+
+VkDescriptorPoolCreateInfo descriptor_pool_create_info = {
+	VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, nullptr, 0,
+	16,
+	static_cast<uint32_t>(descriptor_types.size()),
+	descriptor_types.data()
+};
+
+VkResult result = vkCreateDescriptorPool(context.device, &descriptor_pool_create_info, nullptr, &rendercontext.mainDescriptorPool);
+
+
+
+/// Descriptor Set Layout Binding
+
+// on a ici deux Uniform Buffer, le premier sur le binding point 0 n'est accessible que depuis le Vertex Shader 
+// le second, sur le binding point 1, est accessible par le Vertex Shader et le Fragment Shader
+// le dernier paramètre, ici à nullptr, n'est utile que pour les textures (!= nullptr si type == _TEXTURE_COMBINED)
+
+std::vector<VkDescriptorSetLayoutBinding> layoutBindings = {
+	{
+		0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,        // binding point, VkDescriptorType descriptorType
+		1, VK_SHADER_STAGE_VERTEX_BIT,               // count, VkShaderStageFlags   stageFlags
+		nullptr                                     // const VkSampler    * pImmutableSamplers
+	},
+	{
+		1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,        // binding point, VkDescriptorType descriptorType
+		1, VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,   // count, VkShaderStageFlags   stageFlags
+		nullptr                                     // const VkSampler    * pImmutableSamplers
+	}
+};
+
+VkDescriptorSetLayoutCreateInfo setLayoutCreateInfo = {
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,  // VkStructureType                      sType
+        nullptr,                                              // const void                         * pNext
+        0,                                                    // VkDescriptorSetLayoutCreateFlags     flags
+        static_cast<uint32_t>(layoutBindings.size()),               // uint32_t                             bindingCount
+        layoutBindings.data()                                       // const VkDescriptorSetLayoutBinding * pBindings
+    };
+    
+VkResult result = vkCreateDescriptorSetLayout(logical_device, &setLayoutCreateInfo, nullptr, &rendercontext.layoutUBO);
+    
+
