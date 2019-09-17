@@ -421,10 +421,6 @@ bool VulkanGraphicsApplication::Initialize()
 	VkShaderModule vertShaderModule = context.createShaderModule(vertShaderCode);
 	VkShaderModule fragShaderModule = context.createShaderModule(fragShaderCode);
 
-	VkPipelineLayoutCreateInfo pipelineInfo = {};
-	pipelineInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-	vkCreatePipelineLayout(context.device, &pipelineInfo, nullptr, &rendercontext.mainPipelineLayout);
-
 	// Common ---
 
 	VkPipelineVertexInputStateCreateInfo vertexInputInfo = {};
@@ -455,8 +451,11 @@ bool VulkanGraphicsApplication::Initialize()
 	rasterizationInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
 	rasterizationInfo.cullMode = VK_CULL_MODE_BACK_BIT;
 	rasterizationInfo.polygonMode = VK_POLYGON_MODE_FILL;
+#ifdef OPENGL_HANDEDNESS
+	rasterizationInfo.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+#else
 	rasterizationInfo.frontFace = VK_FRONT_FACE_CLOCKWISE;
-
+#endif
 	VkPipelineMultisampleStateCreateInfo multisampleInfo = {};
 	multisampleInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
 	multisampleInfo.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
@@ -481,7 +480,6 @@ bool VulkanGraphicsApplication::Initialize()
 	gfxPipelineInfo.pRasterizationState = &rasterizationInfo;
 	gfxPipelineInfo.pMultisampleState = &multisampleInfo;
 	gfxPipelineInfo.pColorBlendState = &colorBlendInfo;
-	gfxPipelineInfo.layout = rendercontext.mainPipelineLayout;
 	gfxPipelineInfo.renderPass = rendercontext.renderPass;
 	gfxPipelineInfo.basePipelineIndex = -1;
 	gfxPipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
@@ -503,6 +501,19 @@ bool VulkanGraphicsApplication::Initialize()
 
 	gfxPipelineInfo.stageCount = 2;
 	gfxPipelineInfo.pStages = shaderStages;
+
+	VkPipelineLayoutCreateInfo pipelineInfo = {};
+	pipelineInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+	pipelineInfo.pushConstantRangeCount = 1;
+	// les specs de Vulkan garantissent 128 octets de push constants
+	// voir properties.limits.maxPushConstantsSize
+	// dans les faits, la plupart des drivers/GPUs ne supportent pas
+	// autant d'octets de maniere optimum
+	VkPushConstantRange constantRange = {VK_SHADER_STAGE_VERTEX_BIT, sizeof(float), 0};
+	pipelineInfo.pPushConstantRanges = &constantRange;
+	vkCreatePipelineLayout(context.device, &pipelineInfo, nullptr, &rendercontext.mainPipelineLayout);
+
+	gfxPipelineInfo.layout = rendercontext.mainPipelineLayout;
 
 	vkCreateGraphicsPipelines(context.device, nullptr, 1, &gfxPipelineInfo
 		, nullptr, &rendercontext.mainPipeline);
@@ -619,6 +630,8 @@ bool VulkanGraphicsApplication::Display()
 	vkCmdBeginRenderPass(commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
 	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipeline);
+	float time = (float)currentTime;
+	vkCmdPushConstants(commandBuffer, rendercontext.mainPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float), &time);
 	vkCmdDraw(commandBuffer, 3, 1, 0, 0);
 
 	vkCmdEndRenderPass(commandBuffer);
