@@ -442,10 +442,15 @@ bool VulkanGraphicsApplication::Initialize()
 	viewport.height = (float)context.swapchainExtent.height;
 	viewport.minDepth = 0.0f;
 	viewport.maxDepth = 1.0f;
+	VkRect2D scissor = {
+		{0, 0}, {viewport.width, viewport.height}
+	};
 	VkPipelineViewportStateCreateInfo viewportInfo = {};
 	viewportInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
 	viewportInfo.viewportCount = 1;
 	viewportInfo.pViewports = &viewport;
+	viewportInfo.scissorCount = 1;
+	viewportInfo.pScissors = &scissor;
 
 	VkPipelineRasterizationStateCreateInfo rasterizationInfo = {};
 	rasterizationInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
@@ -456,6 +461,8 @@ bool VulkanGraphicsApplication::Initialize()
 #else
 	rasterizationInfo.frontFace = VK_FRONT_FACE_CLOCKWISE;
 #endif
+	rasterizationInfo.lineWidth = 1.f;
+
 	VkPipelineMultisampleStateCreateInfo multisampleInfo = {};
 	multisampleInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
 	multisampleInfo.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
@@ -509,7 +516,7 @@ bool VulkanGraphicsApplication::Initialize()
 	// voir properties.limits.maxPushConstantsSize
 	// dans les faits, la plupart des drivers/GPUs ne supportent pas
 	// autant d'octets de maniere optimum
-	VkPushConstantRange constantRange = {VK_SHADER_STAGE_VERTEX_BIT, sizeof(float), 0};
+	VkPushConstantRange constantRange = {VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float)};
 	pipelineInfo.pPushConstantRanges = &constantRange;
 	vkCreatePipelineLayout(context.device, &pipelineInfo, nullptr, &rendercontext.mainPipelineLayout);
 
@@ -517,7 +524,6 @@ bool VulkanGraphicsApplication::Initialize()
 
 	vkCreateGraphicsPipelines(context.device, nullptr, 1, &gfxPipelineInfo
 		, nullptr, &rendercontext.mainPipeline);
-
 
 
 	vkDestroyShaderModule(context.device, fragShaderModule, nullptr);
