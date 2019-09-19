@@ -33,6 +33,11 @@
 #include <vector>
 #include <array>
 
+#define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#include <glm/glm/glm.hpp>
+#include <glm/glm/gtc/matrix_transform.hpp>
+
 #ifdef _DEBUG
 #define DEBUG_CHECK_VK(x) if (VK_SUCCESS != (x)) { std::cout << (#x) << std::endl; __debugbreak(); }
 #else
@@ -57,8 +62,29 @@ static std::vector<char> readFile(const std::string& filename) {
 	return buffer;
 }
 
+struct SceneMatrices
+{
+	glm::mat4 world;
+	glm::mat4 view;
+	glm::mat4 projection;
+} sceneMatrices;
 
+// scene data
+struct Buffer
+{
+	VkBuffer buffer;
+	VkDeviceMemory memory;
+	VkDeviceSize size;
+	VkDeviceSize offset;
+	void* data;
+	VkBufferUsageFlags usage;
+	VkMemoryPropertyFlags properties;
+};
+Buffer sceneBuffers[2]; // double buffer
 VkDescriptorSetLayout sceneSetLayout;
+VkDescriptorSet sceneSet;
+VkDescriptorPool sceneDescriptorPool;
+
 
 struct VulkanDeviceContext
 {
@@ -82,6 +108,7 @@ struct VulkanDeviceContext
 	VkSemaphore presentSemaphores[SWAPCHAIN_IMAGES];
 
 	VkPhysicalDeviceProperties props;
+	std::vector<VkMemoryPropertyFlags> memoryFlags;
 
 	VkShaderModule createShaderModule(const std::vector<char>& code)
 	{
@@ -92,10 +119,23 @@ struct VulkanDeviceContext
 
 		VkShaderModule shaderModule;
 		if (vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
-			throw std::runtime_error("failed to create shader module!");
+			std::cout << "failed to create shader module!" << std::endl;
 		}
 
 		return shaderModule;
+	}
+
+	uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
+		int i = 0;
+		for (auto propertyFlags : memoryFlags) {
+			if ((typeFilter & (1 << i)) && (propertyFlags & properties) == properties) {
+				return i;
+			}
+			i++;
+		}
+
+		std::cout << "failed to find suitable memory type!" << std::endl;
+		return 0;
 	}
 };
 
@@ -115,6 +155,7 @@ struct VulkanRenderContext
 	VkRenderPass renderPass;
 
 	VkImageSubresourceRange mainSubRange;
+
 
 	VkPipeline mainPipeline;
 	VkPipelineLayout mainPipelineLayout;
@@ -224,6 +265,20 @@ bool VulkanGraphicsApplication::Initialize()
 	DEBUG_CHECK_VK(vkEnumeratePhysicalDevices(context.instance, &num_devices, &physical_devices[0]));
 
 	context.physicalDevice = physical_devices[0];
+
+	// capacites du GPU
+	VkPhysicalDeviceProperties deviceProperties;
+	vkGetPhysicalDeviceProperties(context.physicalDevice, &deviceProperties);
+	// exemples d'infos utiles
+	//deviceProperties.limits.maxSamplerAnisotropy;
+	//deviceProperties.limits.maxPushConstantsSize;
+
+	// enumeration des memory types
+	VkPhysicalDeviceMemoryProperties memoryProperties;
+	vkGetPhysicalDeviceMemoryProperties(context.physicalDevice, &memoryProperties);
+	context.memoryFlags.reserve(memoryProperties.memoryTypeCount);
+	for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; i++)
+		context.memoryFlags.push_back(memoryProperties.memoryTypes[i].propertyFlags);
 
 	rendercontext.graphicsQueueIndex = UINT32_MAX;
 	uint32_t queue_families_count = context.MAX_FAMILY_COUNT;
@@ -482,6 +537,16 @@ bool VulkanGraphicsApplication::Initialize()
 
 	// specific
 
+	VkDescriptorPoolSize poolSizes[1] = {
+		VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1*2
+	};
+	VkDescriptorPoolCreateInfo descriptorPoolInfo = {};
+	descriptorPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+	descriptorPoolInfo.maxSets = 1;
+	descriptorPoolInfo.poolSizeCount = 1;
+	descriptorPoolInfo.pPoolSizes = poolSizes;
+	vkCreateDescriptorPool(context.device, &descriptorPoolInfo, nullptr, &sceneDescriptorPool);
+
 	VkPipelineShaderStageCreateInfo vertShaderStageInfo = {};
 	vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
 	vertShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
@@ -499,29 +564,38 @@ bool VulkanGraphicsApplication::Initialize()
 
 	VkPipelineLayoutCreateInfo pipelineInfo = {};
 	pipelineInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-	pipelineInfo.pushConstantRangeCount = 1;
-	// les specs de Vulkan garantissent 128 octets de push constants
-	// voir properties.limits.maxPushConstantsSize
-	// dans les faits, la plupart des drivers/GPUs ne supportent pas
-	// autant d'octets de maniere optimum
-	VkPushConstantRange constantRange = {VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float)};
-	pipelineInfo.pPushConstantRanges = &constantRange;
-	//
-	//
-	pipelineInfo.setLayoutCount = 1;
-	//
-	VkDescriptorSetLayoutBinding sceneSetBindings[1];
-	sceneSetBindings[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, nullptr};
-	//
-	VkDescriptorSetLayoutCreateInfo sceneSetInfo = {};
-	sceneSetInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-	sceneSetInfo.bindingCount = 1;
-	sceneSetInfo.pBindings = sceneSetBindings;
-	vkCreateDescriptorSetLayout(context.device, &sceneSetInfo, nullptr, &sceneSetLayout);
+	{
+		pipelineInfo.pushConstantRangeCount = 1;
+		// les specs de Vulkan garantissent 128 octets de push constants
+		// voir properties.limits.maxPushConstantsSize
+		// dans les faits, la plupart des drivers/GPUs ne supportent pas
+		// autant d'octets de maniere optimum
+		VkPushConstantRange constantRange = { VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float) };
+		pipelineInfo.pPushConstantRanges = &constantRange;
+
+		pipelineInfo.setLayoutCount = 1;
+		// layout : on doit decrire le format de chaque descriptor (binding, type, stage)
+		VkDescriptorSetLayoutBinding sceneSetBindings[1];
+		sceneSetBindings[0] = { 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr };
+		//
+		VkDescriptorSetLayoutCreateInfo sceneSetInfo = {};
+		sceneSetInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+		sceneSetInfo.bindingCount = 1;
+		sceneSetInfo.pBindings = sceneSetBindings;
+		vkCreateDescriptorSetLayout(context.device, &sceneSetInfo, nullptr, &sceneSetLayout);
+
+		VkDescriptorSetAllocateInfo allocateDescInfo = {};
+		allocateDescInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+		allocateDescInfo.descriptorPool = sceneDescriptorPool;
+		allocateDescInfo.descriptorSetCount = 1;
+		allocateDescInfo.pSetLayouts = &sceneSetLayout;
+		vkAllocateDescriptorSets(context.device, &allocateDescInfo, &sceneSet);
+
+		pipelineInfo.pSetLayouts = &sceneSetLayout;
 	
-	//
-	pipelineInfo.pSetLayouts = &sceneSetLayout;
-	vkCreatePipelineLayout(context.device, &pipelineInfo, nullptr, &rendercontext.mainPipelineLayout);
+		vkCreatePipelineLayout(context.device, &pipelineInfo, nullptr, &rendercontext.mainPipelineLayout);
+	}
+
 
 	gfxPipelineInfo.layout = rendercontext.mainPipelineLayout;
 
@@ -532,6 +606,52 @@ bool VulkanGraphicsApplication::Initialize()
 	vkDestroyShaderModule(context.device, fragShaderModule, nullptr);
 	vkDestroyShaderModule(context.device, vertShaderModule, nullptr);
 
+	sceneMatrices.world = glm::mat4(1.f);
+	sceneMatrices.view = glm::lookAt(glm::vec3(0,0,2), glm::vec3(0.f), glm::vec3(0.f, 1.f, 0.f));
+	sceneMatrices.projection = glm::perspective(45.f, context.swapchainExtent.width / (float)context.swapchainExtent.height, 1.f, 1000.f);
+
+	// UBOs
+	VkBufferCreateInfo bufferInfo = {};
+	bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+	bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+	bufferInfo.size = sizeof(SceneMatrices);
+	bufferInfo.queueFamilyIndexCount = 1;
+	uint32_t queueFamilyIndices[] = { rendercontext.graphicsQueueIndex };
+	bufferInfo.pQueueFamilyIndices = queueFamilyIndices;
+	VkMemoryRequirements bufferMemReq;
+	for (int i = 0; i < rendercontext.PENDING_FRAMES; ++i) {
+		DEBUG_CHECK_VK(vkCreateBuffer(context.device, &bufferInfo, nullptr, &sceneBuffers[i].buffer));
+		vkGetBufferMemoryRequirements(context.device, sceneBuffers[i].buffer, &bufferMemReq);
+
+		VkMemoryAllocateInfo bufferAllocInfo = {};
+		bufferAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+		bufferAllocInfo.allocationSize = bufferMemReq.size;
+		bufferAllocInfo.memoryTypeIndex = context.findMemoryType(bufferMemReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+		DEBUG_CHECK_VK(vkAllocateMemory(context.device, &bufferAllocInfo, nullptr, &sceneBuffers[i].memory));
+		DEBUG_CHECK_VK(vkBindBufferMemory(context.device, sceneBuffers[i].buffer, sceneBuffers[i].memory, 0));
+		sceneBuffers[i].size = bufferMemReq.size;
+		VkMappedMemoryRange mappedRange = {};
+		mappedRange.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+		mappedRange.memory = sceneBuffers[i].memory;
+		mappedRange.size = VK_WHOLE_SIZE;
+		DEBUG_CHECK_VK(vkInvalidateMappedMemoryRanges(context.device, 1, &mappedRange));
+		void* dest;
+		DEBUG_CHECK_VK(vkMapMemory(context.device, sceneBuffers[i].memory, 0, VK_WHOLE_SIZE, 0, &dest));
+		memcpy(dest, &sceneMatrices, bufferInfo.size);
+		vkUnmapMemory(context.device, sceneBuffers[i].memory);
+		DEBUG_CHECK_VK(vkFlushMappedMemoryRanges(context.device, 1, &mappedRange));
+
+		// 
+		VkWriteDescriptorSet writeDescriptorSet{};
+		writeDescriptorSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		writeDescriptorSet.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		writeDescriptorSet.descriptorCount = 1;
+		writeDescriptorSet.dstSet = sceneSet;
+		writeDescriptorSet.dstBinding = 0;
+		VkDescriptorBufferInfo sceneBufferInfo = { sceneBuffers[i].buffer, 0, sizeof(SceneMatrices) };
+		writeDescriptorSet.pBufferInfo = &sceneBufferInfo;
+		vkUpdateDescriptorSets(context.device, 1, &writeDescriptorSet, 0, nullptr);
+	}
 
 	m_frame = 0;
 	m_currentFrame = 0;
@@ -548,10 +668,18 @@ bool VulkanGraphicsApplication::Shutdown()
 
 	vkDeviceWaitIdle(context.device);
 
+	for (int i = 0; i < rendercontext.PENDING_FRAMES; i++) {
+		vkFreeMemory(context.device, sceneBuffers[i].memory, nullptr);
+		vkDestroyBuffer(context.device, sceneBuffers[i].buffer, nullptr);
+	}
+
 	vkDestroyPipeline(context.device, rendercontext.mainPipeline, nullptr);
 	vkDestroyPipelineLayout(context.device, rendercontext.mainPipelineLayout, nullptr);
 
-	vkDestroyDescriptorSetLayout(context.device, &sceneSetLayout, nullptr)
+	vkFreeDescriptorSets(context.device, sceneDescriptorPool, 1, &sceneSet);
+
+	vkDestroyDescriptorSetLayout(context.device, sceneSetLayout, nullptr);
+	vkDestroyDescriptorPool(context.device, sceneDescriptorPool, nullptr);
 
 	for (int i = 0; i < rendercontext.PENDING_FRAMES; i++) {
 		vkDestroyFence(context.device, rendercontext.mainFences[i], nullptr);
@@ -603,7 +731,7 @@ bool VulkanGraphicsApplication::Display()
 	std::cout << "[" << m_frame << "] frame time = " << deltaTime*1000.0 << " ms [" << 1.0/deltaTime << " fps]" << std::endl;
 	previousTime = currentTime;
 
-	//vkDeviceWaitIdle(context.device);
+
 	VkCommandBuffer commandBuffer = rendercontext.mainCommandBuffers[m_currentFrame];
 
 	// on bloque tant que la fence soumis avec un command buffer n'a pas ete signale
@@ -641,6 +769,7 @@ bool VulkanGraphicsApplication::Display()
 	vkCmdBeginRenderPass(commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
 	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipeline);
+	vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipelineLayout, 0, 1, &sceneSet, 0, nullptr);
 	float time = (float)currentTime;
 	vkCmdPushConstants(commandBuffer, rendercontext.mainPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float), &time);
 	vkCmdDraw(commandBuffer, 3, 1, 0, 0);

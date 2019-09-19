@@ -32,7 +32,7 @@
     <ClCompile Include="..\libs\volk\volk.c">
       <Filter>Fichiers sources</Filter>
     </ClCompile>
-    <ClCompile Include="02_triangle.cpp">
+    <ClCompile Include="03_perspective.cpp">
       <Filter>Fichiers sources</Filter>
     </ClCompile>
   </ItemGroup>
