@@ -81,8 +81,8 @@ struct Buffer
 	VkMemoryPropertyFlags properties;
 };
 Buffer sceneBuffers[2]; // double buffer
+VkDescriptorSet sceneSet[2];
 VkDescriptorSetLayout sceneSetLayout;
-VkDescriptorSet sceneSet;
 VkDescriptorPool sceneDescriptorPool;
 
 
@@ -542,7 +542,7 @@ bool VulkanGraphicsApplication::Initialize()
 	};
 	VkDescriptorPoolCreateInfo descriptorPoolInfo = {};
 	descriptorPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-	descriptorPoolInfo.maxSets = 1;
+	descriptorPoolInfo.maxSets = 1*2;
 	descriptorPoolInfo.poolSizeCount = 1;
 	descriptorPoolInfo.pPoolSizes = poolSizes;
 	vkCreateDescriptorPool(context.device, &descriptorPoolInfo, nullptr, &sceneDescriptorPool);
@@ -589,7 +589,8 @@ bool VulkanGraphicsApplication::Initialize()
 		allocateDescInfo.descriptorPool = sceneDescriptorPool;
 		allocateDescInfo.descriptorSetCount = 1;
 		allocateDescInfo.pSetLayouts = &sceneSetLayout;
-		vkAllocateDescriptorSets(context.device, &allocateDescInfo, &sceneSet);
+		for (int i = 0; i < rendercontext.PENDING_FRAMES; i++)
+		vkAllocateDescriptorSets(context.device, &allocateDescInfo, &sceneSet[i]);
 
 		pipelineInfo.pSetLayouts = &sceneSetLayout;
 	
@@ -635,10 +636,10 @@ bool VulkanGraphicsApplication::Initialize()
 		mappedRange.memory = sceneBuffers[i].memory;
 		mappedRange.size = VK_WHOLE_SIZE;
 		DEBUG_CHECK_VK(vkInvalidateMappedMemoryRanges(context.device, 1, &mappedRange));
-		void* dest;
-		DEBUG_CHECK_VK(vkMapMemory(context.device, sceneBuffers[i].memory, 0, VK_WHOLE_SIZE, 0, &dest));
-		memcpy(dest, &sceneMatrices, bufferInfo.size);
-		vkUnmapMemory(context.device, sceneBuffers[i].memory);
+		DEBUG_CHECK_VK(vkMapMemory(context.device, sceneBuffers[i].memory, 0, VK_WHOLE_SIZE, 0, &sceneBuffers[i].data));
+		memcpy(sceneBuffers[i].data, &sceneMatrices, bufferInfo.size);
+		//persistent donc on commente 
+		//vkUnmapMemory(context.device, sceneBuffers[i].memory);
 		DEBUG_CHECK_VK(vkFlushMappedMemoryRanges(context.device, 1, &mappedRange));
 
 		// 
@@ -646,7 +647,7 @@ bool VulkanGraphicsApplication::Initialize()
 		writeDescriptorSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 		writeDescriptorSet.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 		writeDescriptorSet.descriptorCount = 1;
-		writeDescriptorSet.dstSet = sceneSet;
+		writeDescriptorSet.dstSet = sceneSet[i];
 		writeDescriptorSet.dstBinding = 0;
 		VkDescriptorBufferInfo sceneBufferInfo = { sceneBuffers[i].buffer, 0, sizeof(SceneMatrices) };
 		writeDescriptorSet.pBufferInfo = &sceneBufferInfo;
@@ -669,15 +670,18 @@ bool VulkanGraphicsApplication::Shutdown()
 	vkDeviceWaitIdle(context.device);
 
 	for (int i = 0; i < rendercontext.PENDING_FRAMES; i++) {
+		// unmap des buffers persistents
+		vkUnmapMemory(context.device, sceneBuffers[i].memory);
 		vkFreeMemory(context.device, sceneBuffers[i].memory, nullptr);
 		vkDestroyBuffer(context.device, sceneBuffers[i].buffer, nullptr);
 	}
 
 	vkDestroyPipeline(context.device, rendercontext.mainPipeline, nullptr);
 	vkDestroyPipelineLayout(context.device, rendercontext.mainPipelineLayout, nullptr);
-
-	vkFreeDescriptorSets(context.device, sceneDescriptorPool, 1, &sceneSet);
-
+	
+	// double buffer
+	vkFreeDescriptorSets(context.device, sceneDescriptorPool, 2, sceneSet);
+	
 	vkDestroyDescriptorSetLayout(context.device, sceneSetLayout, nullptr);
 	vkDestroyDescriptorPool(context.device, sceneDescriptorPool, nullptr);
 
@@ -720,6 +724,8 @@ bool VulkanGraphicsApplication::Shutdown()
 
 bool VulkanGraphicsApplication::Display()
 {
+	// update ---
+
 	int width, height;
 	glfwGetWindowSize(window, &width, &height);
 	
@@ -731,15 +737,38 @@ bool VulkanGraphicsApplication::Display()
 	std::cout << "[" << m_frame << "] frame time = " << deltaTime*1000.0 << " ms [" << 1.0/deltaTime << " fps]" << std::endl;
 	previousTime = currentTime;
 
+	float time = (float)currentTime;
 
-	VkCommandBuffer commandBuffer = rendercontext.mainCommandBuffers[m_currentFrame];
+	sceneMatrices.world = glm::rotate(glm::mat4(1.f), time, glm::vec3(0.f, 1.f, 0.f));
+
+	// render ---
 
 	// on bloque tant que la fence soumis avec un command buffer n'a pas ete signale
 	vkWaitForFences(context.device, 1, &rendercontext.mainFences[m_currentFrame],
 		false, UINT64_MAX);
 	vkResetFences(context.device, 1, &rendercontext.mainFences[m_currentFrame]);
+	VkCommandBuffer commandBuffer = rendercontext.mainCommandBuffers[m_currentFrame];
 	vkResetCommandBuffer(commandBuffer, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT);
 	
+	// COMMAND BUFFER SAFE ICI
+
+	VkMappedMemoryRange mappedRange = {};
+	mappedRange.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+	mappedRange.memory = sceneBuffers[m_currentFrame].memory;
+	mappedRange.size = sizeof(glm::mat4);
+	DEBUG_CHECK_VK(vkInvalidateMappedMemoryRanges(context.device, 1, &mappedRange));
+	memcpy(sceneBuffers[m_currentFrame].data, &sceneMatrices, sizeof(glm::mat4));
+	DEBUG_CHECK_VK(vkFlushMappedMemoryRanges(context.device, 1, &mappedRange));
+	VkWriteDescriptorSet writeDescriptorSet{};
+	writeDescriptorSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+	writeDescriptorSet.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	writeDescriptorSet.descriptorCount = 1;
+	writeDescriptorSet.dstSet = sceneSet[m_currentFrame];
+	writeDescriptorSet.dstBinding = 0;
+	VkDescriptorBufferInfo sceneBufferInfo = { sceneBuffers[m_currentFrame].buffer, 0, sizeof(glm::mat4) };
+	writeDescriptorSet.pBufferInfo = &sceneBufferInfo;
+	vkUpdateDescriptorSets(context.device, 1, &writeDescriptorSet, 0, nullptr);
+
 	VkSemaphore* acquireSem = &context.acquireSemaphores[m_currentFrame];
 	VkSemaphore* presentSem = &context.presentSemaphores[m_currentFrame];
 
@@ -748,8 +777,6 @@ bool VulkanGraphicsApplication::Display()
 	DEBUG_CHECK_VK(vkAcquireNextImageKHR(context.device, context.swapchain
 		, timeout, *acquireSem/*signal des que l'image est disponible */
 		, VK_NULL_HANDLE, &image_index));
-
-	// RENDU ICI
 
 	VkCommandBufferBeginInfo beginInfo = {};
 	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -769,8 +796,8 @@ bool VulkanGraphicsApplication::Display()
 	vkCmdBeginRenderPass(commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
 	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipeline);
-	vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipelineLayout, 0, 1, &sceneSet, 0, nullptr);
-	float time = (float)currentTime;
+	vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipelineLayout, 0, 1, &sceneSet[m_currentFrame], 0, nullptr);
+
 	vkCmdPushConstants(commandBuffer, rendercontext.mainPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float), &time);
 	vkCmdDraw(commandBuffer, 3, 1, 0, 0);
 

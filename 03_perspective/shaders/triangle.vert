@@ -48,7 +48,7 @@ void main() {
 		vec3(sin(time),0.0,cos(time))
 	);
 
-	gl_Position = projectionMatrix * viewMatrix * worldMatrix * vec4(rotationMatrix * scaleMatrix * gl_Position.xyz, 1.0);
+	gl_Position = projectionMatrix * viewMatrix * worldMatrix * vec4(/*rotationMatrix * scaleMatrix **/ gl_Position.xyz, 1.0);
 
 #ifdef OPENGL_HANDEDNESS
     gl_Position.y = -gl_Position.y;
