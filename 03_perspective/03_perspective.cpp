@@ -75,8 +75,9 @@ struct Buffer
 	VkBuffer buffer;
 	VkDeviceMemory memory;
 	VkDeviceSize size;
+	void* data;	// != nullptr => persistent
+	// optionnels
 	VkDeviceSize offset;
-	void* data;
 	VkBufferUsageFlags usage;
 	VkMemoryPropertyFlags properties;
 };
@@ -469,9 +470,9 @@ bool VulkanGraphicsApplication::Initialize()
 	VkPipelineVertexInputStateCreateInfo vertexInputInfo = {};
 	vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 	vertexInputInfo.vertexBindingDescriptionCount = 0;
-	vertexInputInfo.pVertexBindingDescriptions = nullptr; // Optional
+	vertexInputInfo.pVertexBindingDescriptions = nullptr;
 	vertexInputInfo.vertexAttributeDescriptionCount = 0;
-	vertexInputInfo.pVertexAttributeDescriptions = nullptr; // Optional
+	vertexInputInfo.pVertexAttributeDescriptions = nullptr;
 
 	VkPipelineInputAssemblyStateCreateInfo inputAssemblyInfo = {};
 	inputAssemblyInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -509,16 +510,12 @@ bool VulkanGraphicsApplication::Initialize()
 	VkPipelineMultisampleStateCreateInfo multisampleInfo = {};
 	multisampleInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
 	multisampleInfo.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-	//multisampleInfo.minSampleShading = 1.0f; // Optional
+	//multisampleInfo.minSampleShading = 1.0f;
 
 	VkPipelineColorBlendAttachmentState colorBlendAttachment = {};
 	colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-	colorBlendAttachment.blendEnable = VK_FALSE;
-	colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
-	colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
 	VkPipelineColorBlendStateCreateInfo colorBlendInfo = {};
 	colorBlendInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-	colorBlendInfo.logicOpEnable = VK_FALSE;
 	colorBlendInfo.attachmentCount = 1;
 	colorBlendInfo.pAttachments = &colorBlendAttachment;
 
@@ -589,9 +586,11 @@ bool VulkanGraphicsApplication::Initialize()
 		allocateDescInfo.descriptorPool = sceneDescriptorPool;
 		allocateDescInfo.descriptorSetCount = 1;
 		allocateDescInfo.pSetLayouts = &sceneSetLayout;
-		for (int i = 0; i < rendercontext.PENDING_FRAMES; i++)
-		vkAllocateDescriptorSets(context.device, &allocateDescInfo, &sceneSet[i]);
-
+		// on cree deux descriptor sets car on double buffer (il faut donc allouer 2*N*sets)
+		// c'est sceneSet[currentFrame] qui devra etre utilise (bind) avec le pipeline correspondant
+		for (int i = 0; i < rendercontext.PENDING_FRAMES; i++) {
+			vkAllocateDescriptorSets(context.device, &allocateDescInfo, &sceneSet[i]);
+		}
 		pipelineInfo.pSetLayouts = &sceneSetLayout;
 	
 		vkCreatePipelineLayout(context.device, &pipelineInfo, nullptr, &rendercontext.mainPipelineLayout);
@@ -670,17 +669,19 @@ bool VulkanGraphicsApplication::Shutdown()
 	vkDeviceWaitIdle(context.device);
 
 	for (int i = 0; i < rendercontext.PENDING_FRAMES; i++) {
-		// unmap des buffers persistents
+		// il faut detruire le buffer en premier afin de relacher la reference sur la memoire
+		vkDestroyBuffer(context.device, sceneBuffers[i].buffer, nullptr);
+		// unmap des buffers persistents		
 		vkUnmapMemory(context.device, sceneBuffers[i].memory);
 		vkFreeMemory(context.device, sceneBuffers[i].memory, nullptr);
-		vkDestroyBuffer(context.device, sceneBuffers[i].buffer, nullptr);
 	}
 
 	vkDestroyPipeline(context.device, rendercontext.mainPipeline, nullptr);
 	vkDestroyPipelineLayout(context.device, rendercontext.mainPipelineLayout, nullptr);
 	
-	// double buffer
-	vkFreeDescriptorSets(context.device, sceneDescriptorPool, 2, sceneSet);
+	// double buffer, mais pas utile ici car le management est automatique
+	//vkFreeDescriptorSets(context.device, sceneDescriptorPool, 2, sceneSet);
+	vkResetDescriptorPool(context.device, sceneDescriptorPool, 0);
 	
 	vkDestroyDescriptorSetLayout(context.device, sceneSetLayout, nullptr);
 	vkDestroyDescriptorPool(context.device, sceneDescriptorPool, nullptr);
@@ -756,18 +757,13 @@ bool VulkanGraphicsApplication::Display()
 	mappedRange.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
 	mappedRange.memory = sceneBuffers[m_currentFrame].memory;
 	mappedRange.size = sizeof(glm::mat4);
-	DEBUG_CHECK_VK(vkInvalidateMappedMemoryRanges(context.device, 1, &mappedRange));
+	// on peut eviter vkInvalidateMappedMemoryRanges car le buffer ne devrait pas etre modifie par le GPU
+	//DEBUG_CHECK_VK(vkInvalidateMappedMemoryRanges(context.device, 1, &mappedRange));
+	// on peut se passer de invalidate+flush lorsque la memoire du buffer est HOST_COHERENT_BIT
+	// cependant cela implique que l'ensemble du buffer sera toujours synchronise en caches
+	// alors qu'ici on ne souhaite mettre a jour qu'une partie (world matrix), donc il faut synchro manuellement
 	memcpy(sceneBuffers[m_currentFrame].data, &sceneMatrices, sizeof(glm::mat4));
 	DEBUG_CHECK_VK(vkFlushMappedMemoryRanges(context.device, 1, &mappedRange));
-	VkWriteDescriptorSet writeDescriptorSet{};
-	writeDescriptorSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-	writeDescriptorSet.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-	writeDescriptorSet.descriptorCount = 1;
-	writeDescriptorSet.dstSet = sceneSet[m_currentFrame];
-	writeDescriptorSet.dstBinding = 0;
-	VkDescriptorBufferInfo sceneBufferInfo = { sceneBuffers[m_currentFrame].buffer, 0, sizeof(glm::mat4) };
-	writeDescriptorSet.pBufferInfo = &sceneBufferInfo;
-	vkUpdateDescriptorSets(context.device, 1, &writeDescriptorSet, 0, nullptr);
 
 	VkSemaphore* acquireSem = &context.acquireSemaphores[m_currentFrame];
 	VkSemaphore* presentSem = &context.presentSemaphores[m_currentFrame];
@@ -817,13 +813,12 @@ bool VulkanGraphicsApplication::Display()
 	submitInfo.signalSemaphoreCount = 1;
 	vkQueueSubmit(rendercontext.graphicsQueue, 1, &submitInfo
 		, rendercontext.mainFences[m_currentFrame]);
-	// la fence precedente se signale des que le command buffer est totalement traite 
-	// par la queue
+	// la fence precedente se signale des que le command buffer est totalement traite par la queue
 
 	VkPresentInfoKHR presentInfo = {};
 	presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
 	presentInfo.waitSemaphoreCount = 1;
-	presentInfo.pWaitSemaphores = presentSem;// presentation semaphore ici synchro avec le dernier vkQueueSubmit;
+	presentInfo.pWaitSemaphores = presentSem;// presentation semaphore ici synchro avec le dernier vkQueueSubmit
 	presentInfo.swapchainCount = 1;
 	presentInfo.pSwapchains = &context.swapchain;
 	presentInfo.pImageIndices = &image_index;
@@ -845,7 +840,7 @@ int main(void)
 	VulkanGraphicsApplication app;
 
 	/* Create a windowed mode window and its OpenGL context */
-	app.window = glfwCreateWindow(800, 600, "00_minimal", NULL, NULL);
+	app.window = glfwCreateWindow(800, 600, "03_perspective", NULL, NULL);
 	if (!app.window)
 	{
 		glfwTerminate();

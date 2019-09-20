@@ -426,9 +426,9 @@ bool VulkanGraphicsApplication::Initialize()
 	VkPipelineVertexInputStateCreateInfo vertexInputInfo = {};
 	vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 	vertexInputInfo.vertexBindingDescriptionCount = 0;
-	vertexInputInfo.pVertexBindingDescriptions = nullptr; // Optional
+	vertexInputInfo.pVertexBindingDescriptions = nullptr;
 	vertexInputInfo.vertexAttributeDescriptionCount = 0;
-	vertexInputInfo.pVertexAttributeDescriptions = nullptr; // Optional
+	vertexInputInfo.pVertexAttributeDescriptions = nullptr;
 
 	VkPipelineInputAssemblyStateCreateInfo inputAssemblyInfo = {};
 	inputAssemblyInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -466,16 +466,12 @@ bool VulkanGraphicsApplication::Initialize()
 	VkPipelineMultisampleStateCreateInfo multisampleInfo = {};
 	multisampleInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
 	multisampleInfo.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-	//multisampleInfo.minSampleShading = 1.0f; // Optional
+	//multisampleInfo.minSampleShading = 1.0f;
 
 	VkPipelineColorBlendAttachmentState colorBlendAttachment = {};
 	colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-	colorBlendAttachment.blendEnable = VK_FALSE;
-	colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
-	colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
 	VkPipelineColorBlendStateCreateInfo colorBlendInfo = {};
 	colorBlendInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-	colorBlendInfo.logicOpEnable = VK_FALSE;
 	colorBlendInfo.attachmentCount = 1;
 	colorBlendInfo.pAttachments = &colorBlendAttachment;
 
@@ -684,7 +680,7 @@ int main(void)
 	VulkanGraphicsApplication app;
 
 	/* Create a windowed mode window and its OpenGL context */
-	app.window = glfwCreateWindow(800, 600, "00_minimal", NULL, NULL);
+	app.window = glfwCreateWindow(800, 600, "02_triangle", NULL, NULL);
 	if (!app.window)
 	{
 		glfwTerminate();
