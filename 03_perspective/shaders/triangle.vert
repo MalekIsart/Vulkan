@@ -1,6 +1,8 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
 
+//#define OPENGL_NDC
+
 layout(location = 0) out vec3 fragColor;
 
 layout(binding = 0) uniform Matrices
@@ -10,7 +12,7 @@ layout(binding = 0) uniform Matrices
 	mat4 projectionMatrix;
 };
 
-#ifdef OPENGL_HANDEDNESS
+#ifdef OPENGL_NDC
 vec2 positions[3] = vec2[](
     vec2(0.0, 0.5),
     vec2(-0.5, -0.5),
@@ -50,8 +52,9 @@ void main() {
 
 	gl_Position = projectionMatrix * viewMatrix * worldMatrix * vec4(/*rotationMatrix * scaleMatrix **/ gl_Position.xyz, 1.0);
 
-#ifdef OPENGL_HANDEDNESS
+#ifdef OPENGL_NDC
     gl_Position.y = -gl_Position.y;
+	gl_Position.z = (gl_Position.z+gl_Position.w)/2.0;
 #endif
 	fragColor = colors[gl_VertexIndex];
 }
