@@ -42,6 +42,11 @@
 #include <glm/glm/glm.hpp>
 #include <glm/glm/gtc/matrix_transform.hpp>
 
+#include <fbxsdk.h>
+#pragma comment(lib, "libfbxsdk.lib")
+
+#include "stb/stb_image.h"
+
 #ifdef _DEBUG
 #define DEBUG_CHECK_VK(x) if (VK_SUCCESS != (x)) { std::cout << (#x) << std::endl; __debugbreak(); }
 #else
