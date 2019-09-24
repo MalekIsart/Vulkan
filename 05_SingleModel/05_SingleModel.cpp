@@ -72,6 +72,14 @@ static std::vector<char> readFile(const std::string& filename) {
 }
 
 
+struct RenderSurface
+{
+	VkDeviceMemory memory;
+	VkImage image;
+	VkImageView view;
+	VkFormat format;
+};
+
 struct VulkanDeviceContext
 {
 	static const int MAX_DEVICE_COUNT = 9;	// arbitraire, max = IGP + 2x4 GPU max
@@ -141,7 +149,8 @@ struct VulkanRenderContext
 	VkRenderPass renderPass;
 
 	VkImageSubresourceRange mainSubRange;
-
+	
+	RenderSurface depthBuffer;
 
 	VkPipeline mainPipeline;
 	VkPipelineLayout mainPipelineLayout;
@@ -465,32 +474,122 @@ bool VulkanGraphicsApplication::Initialize()
 
 	enum RenderTarget {
 		SWAPCHAIN = 0,
-		COLOR = 1,
+		DEPTH = 1,
 		MAX
 	};
 
-	VkAttachmentDescription attachDesc[RenderTarget::MAX] = {};
-	attachDesc[0].format = context.surfaceFormat.format;
-	attachDesc[0].samples = VK_SAMPLE_COUNT_1_BIT;
-	attachDesc[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-	attachDesc[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-	attachDesc[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-	attachDesc[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-	attachDesc[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-	attachDesc[0].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+	// creation d'une render surface pour le depth buffer
+	// on va donc avoir un second attachment mais de type depth/stencil
+	// le depth buffer n'est utilise qu'en lecture/ecriture dans la passe principale
+	// il est important de le clear en debut de passe mais inutile de conserver son contenu
+	// Par contre, dans le cas ou un effet a besoin d'acceder au depth buffer, 
+	// il faut specifier STORE_OP_STORE pour le champ storeOp du depth attachment
+	RenderSurface& depthBuffer = rendercontext.depthBuffer;
+	depthBuffer.format = VK_FORMAT_D32_SFLOAT; // 32 bit signed float
+	{
+		VkImageCreateInfo imageInfo = {};
+		imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+		imageInfo.imageType = VK_IMAGE_TYPE_2D;
+		imageInfo.flags = 0;
+		imageInfo.extent.width = context.swapchainExtent.width;
+		imageInfo.extent.height = context.swapchainExtent.height;
+		imageInfo.extent.depth = 1; // <- 3D
+		imageInfo.mipLevels = 1;
+		imageInfo.arrayLayers = 1;
+		imageInfo.format = rendercontext.depthBuffer.format;
+		imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+		imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;// | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+		imageInfo.samples = (VkSampleCountFlagBits)1;//VK_SAMPLE_COUNT_1_BIT;
+		imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-	VkAttachmentReference swapAttachRef[1] = {};
-	swapAttachRef[0].attachment = RenderTarget::SWAPCHAIN;
-	swapAttachRef[0].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		if (vkCreateImage(context.device, &imageInfo, nullptr, &rendercontext.depthBuffer.image) != VK_SUCCESS) {
+			std::cout << "error: failed to create render target image!" << std::endl;
+			return false;
+		}
+
+		{
+			VkMemoryRequirements memRequirements;
+			vkGetImageMemoryRequirements(context.device, depthBuffer.image, &memRequirements);
+
+			VkMemoryAllocateInfo allocInfo = {};
+			allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+			allocInfo.allocationSize = memRequirements.size;
+			// LAZILY_ALLOCATED couple a USAGE_TRANSIENT est utile sur mobile pour indiquer
+			// que la zone memoire est volatile / temporaire et qu'elle peut etre utilisee
+			// par toute autre partie du rendering lorsque notre render pass ne dessine pas dedans
+			// sur PC cela ne semble pas supporte par tous les drivers
+			VkMemoryPropertyFlags properties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;//LAZILY_ALLOCATED_BIT;
+			allocInfo.memoryTypeIndex = context.findMemoryType(memRequirements.memoryTypeBits, properties);
+			if (allocInfo.memoryTypeIndex == ~0) {
+				properties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+				allocInfo.memoryTypeIndex = context.findMemoryType(memRequirements.memoryTypeBits, properties);
+			}
+			if (vkAllocateMemory(context.device, &allocInfo, nullptr, &depthBuffer.memory) != VK_SUCCESS) {
+				std::cout << "error: failed to allocate render target image memory!" << std::endl;
+				return false;
+			}
+			if (vkBindImageMemory(context.device, depthBuffer.image, depthBuffer.memory, 0) != VK_SUCCESS) {
+				std::cout << "error: failed to bind render target image memory!" << std::endl;
+				return false;
+			}
+
+			VkImageViewCreateInfo viewInfo = {};
+			viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+			viewInfo.image = depthBuffer.image;
+			viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+			viewInfo.format = depthBuffer.format;
+			viewInfo.subresourceRange = rendercontext.mainSubRange;
+			// todo: add swizzling here when required
+
+			VkImageView imageView;
+			if (vkCreateImageView(context.device, &viewInfo, nullptr, &depthBuffer.view) != VK_SUCCESS) {
+				std::cout << "failed to create texture image view!" << std::endl;
+				return VK_NULL_HANDLE;
+			} 
+		}
+	}
+
+
+	VkAttachmentDescription attachDesc[RenderTarget::MAX] = {};
+	int id = RenderTarget::SWAPCHAIN;
+	attachDesc[id].format = context.surfaceFormat.format;
+	attachDesc[id].samples = VK_SAMPLE_COUNT_1_BIT;
+	attachDesc[id].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	attachDesc[id].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	attachDesc[id].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	attachDesc[id].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	attachDesc[id].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	attachDesc[id].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+	id = RenderTarget::DEPTH;
+	attachDesc[id].format = rendercontext.depthBuffer.format;
+	attachDesc[id].samples = VK_SAMPLE_COUNT_1_BIT;
+	attachDesc[id].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	attachDesc[id].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;		// on ne souhaite pas reutiliser le depth buffer ici
+	attachDesc[id].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	attachDesc[id].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	attachDesc[id].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	attachDesc[id].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+	VkAttachmentReference swapAttachRef[2] = {};
+	id = RenderTarget::SWAPCHAIN;
+	swapAttachRef[id].attachment = RenderTarget::SWAPCHAIN;
+	swapAttachRef[id].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	id = RenderTarget::DEPTH;
+	swapAttachRef[id].attachment = RenderTarget::DEPTH;
+	swapAttachRef[id].layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+	// TODO : subpass dependencies pour transitionner automatiquement le depth buffer
 
 	VkSubpassDescription subpasses[1] = {};
 	subpasses[0].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
 	subpasses[0].colorAttachmentCount = 1;
 	subpasses[0].pColorAttachments = swapAttachRef;
+	subpasses[0].pDepthStencilAttachment = &swapAttachRef[1];
 
 	VkRenderPassCreateInfo renderPassInfo = {};
 	renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-	renderPassInfo.attachmentCount = 1;
+	renderPassInfo.attachmentCount = 2;
 	renderPassInfo.pAttachments = attachDesc;
 	renderPassInfo.subpassCount = 1;
 	renderPassInfo.pSubpasses = subpasses;
@@ -500,12 +599,15 @@ bool VulkanGraphicsApplication::Initialize()
 	VkFramebufferCreateInfo framebufferInfo = {};
 	framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
 	framebufferInfo.renderPass = rendercontext.renderPass;
-	framebufferInfo.attachmentCount = 1;
 	framebufferInfo.layers = 1;
 	framebufferInfo.width = context.swapchainExtent.width;
 	framebufferInfo.height = context.swapchainExtent.height;
+	framebufferInfo.attachmentCount = 2;	// attention, 2 attachments maintenant
+	// les deux framebuffers utilisent le meme depth buffer
+	VkImageView framebufferAttachments[2] = { nullptr, rendercontext.depthBuffer.view };
 	for (int i = 0; i < rendercontext.PENDING_FRAMES; ++i) {
-		framebufferInfo.pAttachments = &context.swapchainImageViews[i];
+		framebufferAttachments[0] = context.swapchainImageViews[i];
+		framebufferInfo.pAttachments = framebufferAttachments;
 		vkCreateFramebuffer(context.device, &framebufferInfo, nullptr, &rendercontext.framebuffers[i]);
 	}
 
@@ -518,6 +620,12 @@ bool VulkanGraphicsApplication::Initialize()
 	VkShaderModule fragShaderModule = context.createShaderModule(fragShaderCode);
 
 	// Common ---
+
+	VkPipelineDepthStencilStateCreateInfo depthStencilInfo = {};
+	depthStencilInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+	depthStencilInfo.depthTestEnable = VK_TRUE;
+	depthStencilInfo.depthWriteEnable = VK_TRUE;
+	depthStencilInfo.depthCompareOp = VK_COMPARE_OP_LESS;//_OR_EQUAL;
 
 	VkPipelineInputAssemblyStateCreateInfo inputAssemblyInfo = {};
 	inputAssemblyInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -569,6 +677,7 @@ bool VulkanGraphicsApplication::Initialize()
 	gfxPipelineInfo.pViewportState = &viewportInfo;
 	gfxPipelineInfo.pInputAssemblyState = &inputAssemblyInfo;
 	gfxPipelineInfo.pRasterizationState = &rasterizationInfo;
+	gfxPipelineInfo.pDepthStencilState = &depthStencilInfo;
 	gfxPipelineInfo.pMultisampleState = &multisampleInfo;
 	gfxPipelineInfo.pColorBlendState = &colorBlendInfo;
 	gfxPipelineInfo.renderPass = rendercontext.renderPass;
@@ -844,6 +953,10 @@ bool VulkanGraphicsApplication::Shutdown()
 		vkDestroyFence(context.device, rendercontext.mainFences[i], nullptr);
 	}
 
+	vkDestroyImageView(context.device, rendercontext.depthBuffer.view, nullptr);
+	vkDestroyImage(context.device, rendercontext.depthBuffer.image, nullptr);
+	vkFreeMemory(context.device, rendercontext.depthBuffer.memory, nullptr);
+
 	for (int i = 0; i < context.SWAPCHAIN_IMAGES; i++) {
 		vkDestroyFramebuffer(context.device, rendercontext.framebuffers[i], nullptr);
 		vkDestroyImageView(context.device, context.swapchainImageViews[i], nullptr);
@@ -944,15 +1057,16 @@ bool VulkanGraphicsApplication::Display()
 	beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 	vkBeginCommandBuffer(commandBuffer, &beginInfo);
 
-	VkClearValue clearValues[1];
+	VkClearValue clearValues[2];
 	clearValues[0].color = { 1.0f, 1.0f, 0.0f, 1.0f };
+	clearValues[1].depthStencil = { 1.0f, 0 };
 
 	VkRenderPassBeginInfo renderPassBeginInfo = {};
 	renderPassBeginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
 	renderPassBeginInfo.renderPass = rendercontext.renderPass;
 	renderPassBeginInfo.framebuffer = rendercontext.framebuffers[m_imageIndex];
 	renderPassBeginInfo.renderArea.extent = context.swapchainExtent;
-	renderPassBeginInfo.clearValueCount = 1;
+	renderPassBeginInfo.clearValueCount = 2;
 	renderPassBeginInfo.pClearValues = clearValues;
 	vkCmdBeginRenderPass(commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
