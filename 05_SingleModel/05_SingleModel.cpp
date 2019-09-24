@@ -606,13 +606,14 @@ bool VulkanGraphicsApplication::Initialize()
 	gfxPipelineInfo.pStages = shaderStages;
 
 
-	VkDescriptorPoolSize poolSizes[1] = {
-		VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1 * rendercontext.PENDING_FRAMES
+	VkDescriptorPoolSize poolSizes[2] = {
+		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1 * rendercontext.PENDING_FRAMES},
+		{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 * rendercontext.PENDING_FRAMES}
 	};
 	VkDescriptorPoolCreateInfo descriptorPoolInfo = {};
 	descriptorPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
 	descriptorPoolInfo.maxSets = 1 * rendercontext.PENDING_FRAMES;
-	descriptorPoolInfo.poolSizeCount = 1;
+	descriptorPoolInfo.poolSizeCount = 2;
 	descriptorPoolInfo.pPoolSizes = poolSizes;
 	vkCreateDescriptorPool(context.device, &descriptorPoolInfo, nullptr, &scene.descriptorPool);
 
@@ -768,6 +769,7 @@ bool VulkanGraphicsApplication::Initialize()
 		bufferAllocInfo.memoryTypeIndex = context.findMemoryType(bufferMemReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT 
 			| VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
 		DEBUG_CHECK_VK(vkAllocateMemory(context.device, &bufferAllocInfo, nullptr, &vbo.memory));
+		ibo.memory = vbo.memory;
 		DEBUG_CHECK_VK(vkBindBufferMemory(context.device, vbo.buffer, vbo.memory, 0));
 		DEBUG_CHECK_VK(vkBindBufferMemory(context.device, ibo.buffer, ibo.memory, ibo.offset));
 		
@@ -801,25 +803,27 @@ bool VulkanGraphicsApplication::Shutdown()
 
 	vkDeviceWaitIdle(context.device);
 
+	// VBO / IBO
 	for (int i = 0; i < Mesh::BufferType::MAX; i++)
 	{
 		// il faut detruire le buffer en premier afin de relacher la reference sur la memoire
 		vkDestroyBuffer(context.device, scene.meshes[0].staticBuffers[i].buffer, nullptr);
-		// sub-allocation si offset != 0
-		if (scene.meshes[0].staticBuffers[i].offset == 0)
-			vkFreeMemory(context.device, scene.meshes[0].staticBuffers[i].memory, nullptr);
 	}
+	// on sait que le buffer VBO contient la memoire pour l'ensemble des data du mesh
+	vkFreeMemory(context.device, scene.meshes[0].staticBuffers[0].memory, nullptr);
 
-	{
-		// il faut detruire le buffer en premier afin de relacher la reference sur la memoire
-		vkDestroyBuffer(context.device, scene.matrices.constantBuffers[0].buffer, nullptr);
-		// unmap des buffers persistents
-		if (scene.matrices.constantBuffers[0].data) {
-			vkUnmapMemory(context.device, scene.matrices.constantBuffers[0].memory);
-			scene.matrices.constantBuffers[0].data = nullptr;
-		}
-		vkFreeMemory(context.device, scene.matrices.constantBuffers[0].memory, nullptr);
+	// UBO
+
+	// il faut detruire le buffer en premier afin de relacher la reference sur la memoire
+	vkDestroyBuffer(context.device, scene.matrices.constantBuffers[0].buffer, nullptr);
+	// unmap des buffers persistents
+	if (scene.matrices.constantBuffers[0].data) {
+		vkUnmapMemory(context.device, scene.matrices.constantBuffers[0].memory);
+		scene.matrices.constantBuffers[0].data = nullptr;
 	}
+	vkFreeMemory(context.device, scene.matrices.constantBuffers[0].memory, nullptr);
+
+	// pipeline
 
 	vkDestroyPipeline(context.device, rendercontext.mainPipeline, nullptr);
 	vkDestroyPipelineLayout(context.device, rendercontext.mainPipelineLayout, nullptr);
