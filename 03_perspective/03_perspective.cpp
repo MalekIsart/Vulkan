@@ -66,6 +66,7 @@ static std::vector<char> readFile(const std::string& filename) {
 	return buffer;
 }
 
+// scene data
 struct SceneMatrices
 {
 	glm::mat4 world;
@@ -73,7 +74,6 @@ struct SceneMatrices
 	glm::mat4 projection;
 };
 
-// scene data
 struct Buffer
 {
 	VkBuffer buffer;
