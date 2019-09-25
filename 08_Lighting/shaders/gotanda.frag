@@ -14,7 +14,7 @@ vec3 FresnelSchlick(vec3 f0, float cosTheta) {
 void main() 
 {
 	// LUMIERE : vecteur VERS la lumiere en repere main droite OpenGL (+Z vers nous)
-	const vec3 L = vec3(0.0, 0.0, 1.0);
+	const vec3 L = normalize(vec3(1.0, 0.0, 1.0));
 	
 	// MATERIAU
 	const vec3 albedo = vec3(1.0, 0.0, 1.0);	// albedo = Cdiff, ici magenta
@@ -35,24 +35,30 @@ void main()
 	float NdotV = max(dot(N, V), 0.001);
 
 	//
-	// diffuse
+	// diffuse = Lambert BRDF * cos0
 	//
-	vec3 diffuse = NdotL * albedo;
+	vec3 diffuse = albedo * NdotL;
 	
 	//
-	// specular (Gotanda)
+	// specular = Gotanda BRDF * cos0
 	//
-	vec3 fresnel = FresnelSchlick(f0, VdotH);
+	// Gotanda utilise VdotH plutot que NdotV
+	// car Blinn-Phong est inspire du modele "micro-facette" base sur le vecteur H
+	vec3 fresnel = FresnelSchlick(f0, VdotH); 
 	float normalisation = (shininess + 2.0) / ( 4.0 * ( 2.0 - exp2(-shininess/2.0) ) );
 	float BlinnPhong = pow(NdotH, shininess);
 	float G = 1.0 / max(NdotL, NdotV);			// NEUMANN
-	vec3 specular = normalisation * fresnel * BlinnPhong * G;
+	vec3 specular = fresnel * vec3(normalisation * BlinnPhong * G) * NdotL;
 	
 	// 
 	// couleur finale
 	//
 	vec3 Ks = fresnel;
-	vec3 Kd = 1.0 - Ks;
+	// Kd implicite
+	// vec3 Kd = vec3(1.0) - Ks;
+	// Gotanda utilise la formulation suivante pour Kd :
+	vec3 Kd = vec3(1.0) - FresnelSchlick(f0, NdotL);
+
 	vec3 finalColor = Kd * diffuse + Ks * specular;
     outColor = vec4(finalColor, 1.0);
 }
