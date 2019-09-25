@@ -42,9 +42,6 @@
 #include <glm/glm/glm.hpp>
 #include <glm/glm/gtc/matrix_transform.hpp>
 
-#include <fbxsdk.h>
-#pragma comment(lib, "libfbxsdk.lib")
-
 #include "stb/stb_image.h"
 
 #ifdef _DEBUG
@@ -239,7 +236,7 @@ void GenerateSphere(Mesh& mesh, int horizSegments, int vertiSegments, float sphe
 			float phi = xSegment * 2.0f * PI;
 			float xPos = std::cos(phi) * std::sin(theta);
 			float yPos = std::cos(theta);
-			float zPos = std::sin(phi) * std::sin(theta);
+			float zPos = -std::sin(phi) * std::sin(theta);
 			Vertex vtx{
 				glm::vec3(xPos*sphereScale, yPos*sphereScale, zPos*sphereScale),
 				glm::vec2(xSegment, ySegment),
@@ -325,7 +322,7 @@ bool VulkanGraphicsApplication::Initialize()
 
 	VkApplicationInfo appInfo = {};
 	appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-	appInfo.pApplicationName = "05_singlemodel";
+	appInfo.pApplicationName = "06_SphereStrip";
 	appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
 	appInfo.pEngineName = "todo engine";
 	appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
@@ -840,7 +837,12 @@ bool VulkanGraphicsApplication::Initialize()
 	vkDestroyShaderModule(context.device, vertShaderModule, nullptr);
 
 	scene.matrices.world = glm::mat4(1.f);
+	// par defaut la matrice lookAt de glm est main droite (repere OpenGL, +Z hors de l'ecran)
+	// le repere du monde et de la camera est donc main droite !
 	scene.matrices.view = glm::lookAt(glm::vec3(0.f, 0.f, 2.f), glm::vec3(0.f), glm::vec3(0.f, 1.f, 0.f));
+	// par defaut la matrice perspective genere un cube NDC (NDC OpenGL = main gauche, Z[-1;+1] +Y vers le haut)
+	// le define "GLM_FORCE_DEPTH_ZERO_TO_ONE" permet de modifier les plans near et far NDC à [0;+1] 
+	// correspondant au NDC Vulkan (mais avec +Y vers le bas)
 	scene.matrices.projection = glm::perspective(45.f, context.swapchainExtent.width / (float)context.swapchainExtent.height, 1.f, 1000.f);
 
 	// UBOs
@@ -897,7 +899,7 @@ bool VulkanGraphicsApplication::Initialize()
 
 	// mesh buffers
 	scene.meshes.resize(1);
-	GenerateSphere(scene.meshes[0], 64, 64);
+	GenerateSphere(scene.meshes[0], 64, 64, 0.5f);
 
 	memset(scene.meshes[0].staticBuffers, 0, sizeof(scene.meshes[0].staticBuffers));
 
@@ -1196,7 +1198,7 @@ int main(void)
 	VulkanGraphicsApplication app;
 
 	/* Create a windowed mode window and its OpenGL context */
-	app.window = glfwCreateWindow(800, 600, "05_singlemodel", NULL, NULL);
+	app.window = glfwCreateWindow(800, 600, "06_SphereStrip", NULL, NULL);
 	if (!app.window)
 	{
 		glfwTerminate();

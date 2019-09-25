@@ -42,9 +42,6 @@
 #include <glm/glm/glm.hpp>
 #include <glm/glm/gtc/matrix_transform.hpp>
 
-#include <fbxsdk.h>
-#pragma comment(lib, "libfbxsdk.lib")
-
 #include "stb/stb_image.h"
 
 #ifdef _DEBUG
@@ -781,7 +778,12 @@ bool VulkanGraphicsApplication::Initialize()
 	vkDestroyShaderModule(context.device, vertShaderModule, nullptr);
 
 	scene.matrices.world = glm::mat4(1.f);
+	// par defaut la matrice lookAt de glm est main droite (repere OpenGL, +Z hors de l'ecran)
+	// le repere du monde et de la camera est donc main droite !
 	scene.matrices.view = glm::lookAt(glm::vec3(0.f, 0.f, 2.f), glm::vec3(0.f), glm::vec3(0.f, 1.f, 0.f));
+	// par defaut la matrice perspective genere un cube NDC (NDC OpenGL = main gauche, Z[-1;+1] +Y vers le haut)
+	// le define "GLM_FORCE_DEPTH_ZERO_TO_ONE" permet de modifier les plans near et far NDC à [0;+1] 
+	// correspondant au NDC Vulkan (mais avec +Y vers le bas)
 	scene.matrices.projection = glm::perspective(45.f, context.swapchainExtent.width / (float)context.swapchainExtent.height, 1.f, 1000.f);
 
 	// UBOs
