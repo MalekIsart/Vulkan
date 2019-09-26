@@ -48,12 +48,14 @@ void main()
 	float normalisation = (shininess + 2.0) / ( 4.0 * ( 2.0 - exp2(-shininess/2.0) ) );
 	float BlinnPhong = pow(NdotH, shininess);
 	float G = 1.0 / max(NdotL, NdotV);			// NEUMANN
-	vec3 specular = fresnel * vec3(normalisation * BlinnPhong * G) * NdotL;
+	vec3 specular = vec3(normalisation * BlinnPhong * G) * NdotL;
+	
+	// on utilise le RESULTAT de l'equation de Fresnel comme facteur de balance de l'energie
+	vec3 Ks = fresnel;
 	
 	// 
 	// couleur finale
 	//
-	vec3 Ks = fresnel;
 	// Kd implicite
 	// vec3 Kd = vec3(1.0) - Ks;
 	// Gotanda utilise la formulation suivante pour Kd :
