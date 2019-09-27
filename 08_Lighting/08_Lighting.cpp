@@ -215,10 +215,25 @@ struct Scene
 	VkDescriptorPool descriptorPool;
 };
 
+void GenerateQuadStrip(Mesh& mesh)
+{
+	mesh.indices.reserve(4);
+	mesh.vertices.reserve(4);
+
+	mesh.vertices.push_back({ { -1.f, +1.f, 0.f },{ 0.f, 0.f },{ 0.f, 0.f, 1.f } });
+	mesh.vertices.push_back({ { -1.f, -1.f, 0.f },{ 0.f, 0.f },{ 0.f, 0.f, 1.f } });
+	mesh.vertices.push_back({ { +1.f, +1.f, 0.f },{ 0.f, 0.f },{ 0.f, 0.f, 1.f } });
+	mesh.vertices.push_back({ { +1.f, -1.f, 0.f },{ 0.f, 0.f },{ 0.f, 0.f, 1.f } });
+	mesh.indices.push_back(0);
+	mesh.indices.push_back(1);
+	mesh.indices.push_back(2);
+	mesh.indices.push_back(3);
+}
+
 // 
 // Sphere procedurale par revolution avec une typologie TRIANGLE STRIP
-// le winding est CLOCKWISE (il faut inverser l'ordre des indices pour changer le winding)
-//
+// il faut inverser l'ordre des indices pour changer le winding (voir plus bas)
+// La sphere est ici definie en CCW
 void GenerateSphere(Mesh& mesh, int horizSegments, int vertiSegments, float sphereScale = 1.f)
 {
 	const float PI = 3.14159265359f;
@@ -236,11 +251,11 @@ void GenerateSphere(Mesh& mesh, int horizSegments, int vertiSegments, float sphe
 			float phi = xSegment * 2.0f * PI;
 			float xPos = std::cos(phi) * std::sin(theta);
 			float yPos = std::cos(theta);
-			float zPos = -1.f * std::sin(phi) * std::sin(theta);
+			float zPos = std::sin(phi) * std::sin(theta);
 			Vertex vtx{
 				glm::vec3(xPos*sphereScale, yPos*sphereScale, zPos*sphereScale),
 				glm::vec2(xSegment, ySegment),
-				glm::vec3(-xPos, -yPos, -zPos)
+				glm::vec3(xPos, yPos, zPos)
 			};
 			mesh.vertices.push_back(vtx);
 		}
@@ -253,6 +268,8 @@ void GenerateSphere(Mesh& mesh, int horizSegments, int vertiSegments, float sphe
 		{
 			for (int x = 0; x <= horizSegments; ++x)
 			{
+				// (y) suivi de (y+1) -> CW
+				// (y+1) suivi de (y) -> CCW
 				mesh.indices.push_back((y + 1) * (horizSegments + 1) + x);
 				mesh.indices.push_back(y       * (horizSegments + 1) + x);
 			}
@@ -261,6 +278,8 @@ void GenerateSphere(Mesh& mesh, int horizSegments, int vertiSegments, float sphe
 		{
 			for (int x = horizSegments; x >= 0; --x)
 			{
+				// (y+1) suivi de (y) -> CW
+				// (y) suivi de (y+1) -> CCW
 				mesh.indices.push_back(y       * (horizSegments + 1) + x);
 				mesh.indices.push_back((y + 1) * (horizSegments + 1) + x);
 			}
@@ -439,10 +458,21 @@ bool VulkanGraphicsApplication::Initialize()
 	// swap chain
 
 	// todo: enumerer (cf validation)
-	uint32_t formatCount = 1;
-	VkSurfaceFormatKHR surfaceFormats[1];
+	uint32_t formatCount = 10;
+	VkSurfaceFormatKHR surfaceFormats[10];
 	vkGetPhysicalDeviceSurfaceFormatsKHR(context.physicalDevice, context.surface, &formatCount, surfaceFormats);
-	context.surfaceFormat = surfaceFormats[0];
+	// on sait que le moniteur converti de sRGB vers lineaire
+	// mais nos shader ecrivent du lineaire (nos calculs sont lineaires)
+	// il faut donc forcer l'ecriture dans le framebuffer en sRGB
+	// VK_FORMAT_***_SRGB -> conversion automatique lineaire vers sRGB
+	// attention ce n'est valable que pour la swapchain ici
+	for (int i = 0; i < formatCount; i++) {
+		if (surfaceFormats[i].format == VK_FORMAT_R8G8B8A8_SRGB ||
+			surfaceFormats[i].format == VK_FORMAT_B8G8R8A8_SRGB) {
+			context.surfaceFormat = surfaceFormats[i];
+			break;
+		}
+	}
 	if (context.surfaceFormat.format == VK_FORMAT_UNDEFINED)
 		__debugbreak();
 
@@ -593,6 +623,8 @@ bool VulkanGraphicsApplication::Initialize()
 			viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
 			viewInfo.format = depthBuffer.format;
 			viewInfo.subresourceRange = rendercontext.mainSubRange;
+			// on cree un depth buffer, l'IMAGE_ASPECT doit correspondre
+			viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
 			// todo: add swizzling here when required
 
 			VkImageView imageView;
@@ -744,7 +776,7 @@ bool VulkanGraphicsApplication::Initialize()
 	// VAO / input layout
 	uint32_t stride = 0;
 	VkVertexInputAttributeDescription vertexInputLayouts[3];
-	vertexInputLayouts[0] = { 0/*location*/, 0/*binding*/, VK_FORMAT_R32G32B32_SFLOAT/*format*/, 0/*offset*/ };
+	vertexInputLayouts[0] = { 0/*location*/, 0/*binding*/, VK_FORMAT_R32G32B32_SFLOAT/*format*/, stride/*offset*/ };
 	stride += sizeof(glm::vec3);
 	vertexInputLayouts[1] = { 1/*location*/, 0/*binding*/, VK_FORMAT_R32G32_SFLOAT/*format*/, stride/*offset*/ };
 	stride += sizeof(glm::vec2);
@@ -900,7 +932,7 @@ bool VulkanGraphicsApplication::Initialize()
 	// mesh buffers
 	scene.meshes.resize(1);
 	GenerateSphere(scene.meshes[0], 64, 64, 0.5f);
-
+	//GenerateCube(scene.meshes[0]);
 	memset(scene.meshes[0].staticBuffers, 0, sizeof(scene.meshes[0].staticBuffers));
 
 	Buffer& vbo = scene.meshes[0].staticBuffers[0];
@@ -1063,7 +1095,7 @@ bool VulkanGraphicsApplication::Update()
 
 	float time = (float)currentTime;
 
-	scene.matrices.world = glm::rotate(glm::mat4(1.f), time, glm::vec3(0.f, 1.f, 0.f));
+	//scene.matrices.world = glm::rotate(glm::mat4(1.f), time, glm::vec3(0.f, 1.f, 0.f));
 
 	return true;
 }

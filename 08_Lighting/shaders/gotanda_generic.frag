@@ -40,7 +40,7 @@ void main()
 	
 	// MATERIAU GENERIQUE
 	// doit etre parametre en tant que variables uniformes
-	const float metallic = 1.0;					// surface metallique ou pas ?
+	const float metallic = 0.0;					// surface metallique ou pas ?
 	const vec3 albedo = vec3(1.0, 0.0, 1.0);	// albedo = Cdiff si isolant, Cspec si metallic
 	const float reflectance = 0.5;	// remplace f0 dans le cas isolant, ignore en metallic
 	const float perceptual_roughness = 0.5;		// controle la taille de la glossiness 
@@ -70,7 +70,7 @@ void main()
 	//
 	// diffuse = Lambert BRDF * cos0
 	// Pas de composante diffuse si metallique 
-	vec3 diffuse = CalcDiffuseColor(albedo * NdotL, metallic);
+	vec3 diffuse = CalcDiffuseColor(albedo, metallic) * NdotL;
 	
 	//
 	// specular = Gotanda BRDF * cos0
@@ -80,6 +80,7 @@ void main()
 	
 	vec3 fresnel = FresnelSchlick(f0, VdotH); 
 	float normalisation = (shininess + 2.0) / ( 4.0 * ( 2.0 - exp2(-shininess/2.0) ) );	
+	
 	float BlinnPhong = pow(NdotH, shininess);
 	float G = 1.0 / max(NdotL, NdotV);			// NEUMANN
 	vec3 specular = vec3(normalisation * BlinnPhong * G) * NdotL;
@@ -96,5 +97,9 @@ void main()
 	vec3 Kd = vec3(1.0) - FresnelSchlick(f0, NdotL);
 
 	vec3 finalColor = Kd * diffuse + Ks * specular;
-    outColor = vec4(finalColor, 1.0);
+    
+	// ne pas oublier la conversion linear->gamma si pas gere automatiquement
+    // finalColor = pow(finalColor, vec3(1.0/2.2));
+
+	outColor = vec4(finalColor, 1.0);
 }

@@ -62,5 +62,9 @@ void main()
 	vec3 Kd = vec3(1.0) - FresnelSchlick(f0, NdotL);
 
 	vec3 finalColor = Kd * diffuse + Ks * specular;
+
+	// ne pas oublier la conversion linear->gamma si pas gere automatiquement
+    // finalColor = pow(finalColor, vec3(1.0/2.2));
+
     outColor = vec4(finalColor, 1.0);
 }

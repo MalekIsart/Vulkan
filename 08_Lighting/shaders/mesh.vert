@@ -24,13 +24,17 @@ void main() {
 	mat3 normalMatrix = transpose(inverse(mat3(worldMatrix))); 
 	vec3 normalWS = normalMatrix * a_normal;
 	v_position = vec3(positionWS);
-	v_normal = normalWS;
+	v_normal = normalize(normalWS);
 	v_eyePosition = -vec3(viewMatrix[3]); 
 
 	gl_Position = projectionMatrix * viewMatrix * positionWS;
 
 #ifdef OPENGL_NDC
+	// cette ligne est importante si votre mesh est defini en counter clockwise
+	// et que le mode frontFace est VK_FRONT_FACE_COUNTER_CLOCKWISE
     gl_Position.y = -gl_Position.y;
-	gl_Position.z = (gl_Position.z+gl_Position.w)/2.0;
+
+	// dans le cas ou la matrice de projection n'est pas [0;+1] decommentez cette ligne
+	//gl_Position.z = (gl_Position.z+gl_Position.w)/2.0;
 #endif
 }
