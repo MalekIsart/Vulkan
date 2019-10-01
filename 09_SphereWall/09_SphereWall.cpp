@@ -220,7 +220,7 @@ struct Scene
 	// alors qu'il est "bind" par un autre command buffer
 	// On va donc avoir des descriptorSets par frame/command buffer
 	VkDescriptorSet descriptorSet[SceneMatrices::BufferType::MAX * 2];
-	VkDescriptorSetLayout descriptorSetLayout;
+	VkDescriptorSetLayout descriptorSetLayout[SceneMatrices::BufferType::MAX];
 	VkDescriptorPool descriptorPool;
 };
 
@@ -350,7 +350,7 @@ bool VulkanGraphicsApplication::Initialize()
 
 	VkApplicationInfo appInfo = {};
 	appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-	appInfo.pApplicationName = "08_Lighting";
+	appInfo.pApplicationName = "09_SphereWall";
 	appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
 	appInfo.pEngineName = "todo engine";
 	appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
@@ -840,30 +840,36 @@ bool VulkanGraphicsApplication::Initialize()
 		VkPushConstantRange constantRange = { VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float) };
 		pipelineInfo.pPushConstantRanges = &constantRange;
 
-		pipelineInfo.setLayoutCount = 1;
+		pipelineInfo.setLayoutCount = 2;
+
 		// layout : on doit decrire le format de chaque descriptor (binding, type, stage)
-		VkDescriptorSetLayoutBinding sceneSetBindings[1 /*UBO*/ + 1 /*SAMPLER*/];
-		sceneSetBindings[0] = { 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2, VK_SHADER_STAGE_VERTEX_BIT, nullptr };
-		sceneSetBindings[1] = { 2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
+		VkDescriptorSetLayoutBinding sceneSetBindings[2 /*UBO*/ + 1 /*SAMPLER*/];
+		// set 0
+		sceneSetBindings[0] = { 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr };
+		// set 1
+		sceneSetBindings[1] = { 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr };
 		// todo
+		sceneSetBindings[2] = { 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
 		//
 		VkDescriptorSetLayoutCreateInfo sceneSetInfo = {};
 		sceneSetInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-		sceneSetInfo.bindingCount = 2;
-		sceneSetInfo.pBindings = sceneSetBindings;
-		vkCreateDescriptorSetLayout(context.device, &sceneSetInfo, nullptr, &scene.descriptorSetLayout);
+		sceneSetInfo.bindingCount = 1;
+		for (int i = 0; i < SceneMatrices::MAX; i++) {
+			sceneSetInfo.pBindings = &sceneSetBindings[i];
+			vkCreateDescriptorSetLayout(context.device, &sceneSetInfo, nullptr, &scene.descriptorSetLayout[i]);
+		}
 
 		VkDescriptorSetAllocateInfo allocateDescInfo = {};
 		allocateDescInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
 		allocateDescInfo.descriptorPool = scene.descriptorPool;
 		allocateDescInfo.descriptorSetCount = 2;
-		allocateDescInfo.pSetLayouts = &scene.descriptorSetLayout;
-		// on cree deux descriptor sets car on double buffer (il faut donc allouer 2*N*sets)
+		allocateDescInfo.pSetLayouts = scene.descriptorSetLayout;
+		// on cree deux descriptor sets a chaque fois car on double buffer (il faut donc allouer 2*N*sets)
 		// c'est sceneSet[currentFrame] qui devra etre utilise (bind) avec le pipeline correspondant
 		for (int i = 0; i < rendercontext.PENDING_FRAMES; i++) {
 			vkAllocateDescriptorSets(context.device, &allocateDescInfo, &scene.descriptorSet[i * SceneMatrices::MAX]);
 		}
-		pipelineInfo.pSetLayouts = &scene.descriptorSetLayout;
+		pipelineInfo.pSetLayouts = scene.descriptorSetLayout;
 
 		vkCreatePipelineLayout(context.device, &pipelineInfo, nullptr, &rendercontext.mainPipelineLayout);
 	}
@@ -887,7 +893,7 @@ bool VulkanGraphicsApplication::Initialize()
 
 	// par defaut la matrice lookAt de glm est main droite (repere OpenGL, +Z hors de l'ecran)
 	// le repere du monde et de la camera est donc main droite !
-	scene.matrices.view = glm::lookAt(glm::vec3(0.f, 0.f, 2.f), glm::vec3(0.f), glm::vec3(0.f, 1.f, 0.f));
+	scene.matrices.view = glm::lookAt(glm::vec3(0.f, 0.f, 12.f), glm::vec3(0.f), glm::vec3(0.f, 1.f, 0.f));
 	// par defaut la matrice perspective genere un cube NDC (NDC OpenGL = main gauche, Z[-1;+1] +Y vers le haut)
 	// le define "GLM_FORCE_DEPTH_ZERO_TO_ONE" permet de modifier les plans near et far NDC à [0;+1] 
 	// correspondant au NDC Vulkan (mais avec +Y vers le bas)
@@ -941,16 +947,20 @@ bool VulkanGraphicsApplication::Initialize()
 			{ scene.matrices.constantBuffers[SceneMatrices::GLOBAL].buffer, 0, constantSizes[SceneMatrices::GLOBAL] },		// binding 0
 			{ scene.matrices.constantBuffers[SceneMatrices::DYNAMIC].buffer, 0, constantSizes[SceneMatrices::DYNAMIC] }		// binding 1
 		};
-		for (int fb = 0; fb < rendercontext.PENDING_FRAMES; fb++)
+		
+		VkWriteDescriptorSet writeDescriptorSet[SceneMatrices::MAX] = {};
+		for (int i = 0; i < SceneMatrices::MAX; i++)
 		{
-			VkWriteDescriptorSet writeDescriptorSet = {};
-			writeDescriptorSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-			writeDescriptorSet.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-			writeDescriptorSet.dstBinding = 0;
-			writeDescriptorSet.descriptorCount = SceneMatrices::MAX;
-			writeDescriptorSet.pBufferInfo = sceneBufferInfo;
-			writeDescriptorSet.dstSet = scene.descriptorSet[fb * rendercontext.PENDING_FRAMES]; // le premier des 2 UBOs
-			vkUpdateDescriptorSets(context.device, 1, &writeDescriptorSet, 0, nullptr);
+			writeDescriptorSet[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			writeDescriptorSet[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+			writeDescriptorSet[i].dstBinding = 0;
+			writeDescriptorSet[i].descriptorCount = 1;
+			writeDescriptorSet[i].pBufferInfo = &sceneBufferInfo[i];
+			for (int fb = 0; fb < rendercontext.PENDING_FRAMES; fb++)
+			{
+				writeDescriptorSet[i].dstSet = scene.descriptorSet[i + fb * rendercontext.PENDING_FRAMES];
+				vkUpdateDescriptorSets(context.device, 1, &writeDescriptorSet[i], 0, nullptr);
+			}
 		}
 	}
 
@@ -1061,7 +1071,8 @@ bool VulkanGraphicsApplication::Shutdown()
 	//vkFreeDescriptorSets(context.device, sceneDescriptorPool, 2, sceneSet);
 	vkResetDescriptorPool(context.device, scene.descriptorPool, 0);
 
-	vkDestroyDescriptorSetLayout(context.device, scene.descriptorSetLayout, nullptr);
+	for (int i = 0; i < SceneMatrices::MAX; i++)
+		vkDestroyDescriptorSetLayout(context.device, scene.descriptorSetLayout[i], nullptr);
 	vkDestroyDescriptorPool(context.device, scene.descriptorPool, nullptr);
 
 	for (int i = 0; i < rendercontext.PENDING_FRAMES; i++) {
@@ -1149,7 +1160,7 @@ bool VulkanGraphicsApplication::Display()
 
 	VkMappedMemoryRange mappedRange = {};
 	mappedRange.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-	mappedRange.memory = scene.matrices.constantBuffers[0/*m_currentFrame*/].memory;
+	mappedRange.memory = scene.matrices.constantBuffers[0].memory;
 	mappedRange.size = sizeof(glm::mat4);
 	// on peut eviter vkInvalidateMappedMemoryRanges car le buffer ne devrait pas etre modifie par le GPU
 	//DEBUG_CHECK_VK(vkInvalidateMappedMemoryRanges(context.device, 1, &mappedRange));
@@ -1186,7 +1197,7 @@ bool VulkanGraphicsApplication::Display()
 	vkCmdBeginRenderPass(commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
 	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipeline);
-	vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipelineLayout, 0, 2, &scene.descriptorSet[0/*m_currentFrame*/], 0, nullptr);
+	vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipelineLayout, 0, 2, &scene.descriptorSet[2*m_currentFrame], 0, nullptr);
 
 	//vkCmdPushConstants(commandBuffer, rendercontext.mainPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float), &time);
 	
@@ -1257,7 +1268,7 @@ int main(void)
 	VulkanGraphicsApplication app;
 
 	/* Create a windowed mode window and its OpenGL context */
-	app.window = glfwCreateWindow(800, 600, "08_Lighting", NULL, NULL);
+	app.window = glfwCreateWindow(800, 600, "09_SphereWall", NULL, NULL);
 	if (!app.window)
 	{
 		glfwTerminate();

@@ -11,13 +11,13 @@ layout(location = 0) out vec3 v_position;
 layout(location = 1) out vec3 v_normal;
 layout(location = 2) out vec3 v_eyePosition;
 
-layout(binding = 0) uniform Matrices
+layout(set = 0, binding = 0) uniform Matrices
 {
 	mat4 viewMatrix;
 	mat4 projectionMatrix;
 };
 
-layout(binding = 1) uniform Instances
+layout(set = 1, binding = 0) uniform Instances
 {
 	mat4 worldMatrix[11*11];
 };
