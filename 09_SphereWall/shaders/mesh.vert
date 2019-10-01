@@ -22,10 +22,19 @@ layout(set = 1, binding = 0) uniform Instances
 	mat4 worldMatrix[11*11];
 };
 
-void main() {
-    vec4 positionWS = worldMatrix[gl_InstanceIndex] * vec4(a_position, 1.0);
+layout(push_constant) uniform PushConstants {
+	float perceptual_roughness;
+	float reflectance;
+	float metallic;
+	int instanceIndex;
+};
+
+void main() 
+{
+	int index = instanceIndex; // gl_InstanceIndex;
+    vec4 positionWS = worldMatrix[instanceIndex] * vec4(a_position, 1.0);
 	// todo: UBO
-	mat3 normalMatrix = transpose(inverse(mat3(worldMatrix[gl_InstanceIndex]))); 
+	mat3 normalMatrix = transpose(inverse(mat3(worldMatrix[instanceIndex]))); 
 	vec3 normalWS = normalMatrix * a_normal;
 	v_position = vec3(positionWS);
 	v_normal = normalize(normalWS);

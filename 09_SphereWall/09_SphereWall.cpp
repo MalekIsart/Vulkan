@@ -837,7 +837,7 @@ bool VulkanGraphicsApplication::Initialize()
 		// voir properties.limits.maxPushConstantsSize
 		// dans les faits, la plupart des drivers/GPUs ne supportent pas
 		// autant d'octets de maniere optimum
-		VkPushConstantRange constantRange = { VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float) };
+		VkPushConstantRange constantRange = { VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(glm::vec4) };
 		pipelineInfo.pPushConstantRanges = &constantRange;
 
 		pipelineInfo.setLayoutCount = 2;
@@ -1199,14 +1199,35 @@ bool VulkanGraphicsApplication::Display()
 	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipeline);
 	vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipelineLayout, 0, 2, &scene.descriptorSet[2*m_currentFrame], 0, nullptr);
 
-	//vkCmdPushConstants(commandBuffer, rendercontext.mainPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float), &time);
 	
 	VkDeviceSize offsets[] = { 0 };
 	VkBuffer buffers[] = { scene.meshes[0].staticBuffers[Mesh::BufferType::VBO].buffer };
 	vkCmdBindVertexBuffers(commandBuffer, 0, 1, buffers, offsets);
 	vkCmdBindIndexBuffer(commandBuffer, scene.meshes[0].staticBuffers[Mesh::BufferType::IBO].buffer
 		, 0, VK_INDEX_TYPE_UINT16);
-	vkCmdDrawIndexed(commandBuffer, scene.meshes[0].indices.size(), 11*11, 0, 0, 0);
+	// en utilisant l'hardware instancing
+	//vkCmdDrawIndexed(commandBuffer, scene.meshes[0].indices.size(), 11*11, 0, 0, 0);
+	// en utilisant les push constants
+	struct PushData
+	{
+		float roughness;	// perceptuelle
+		float reflectance;	// perceptuelle (non metaux)
+		float metalness;	
+		int index;
+	} pushData;
+	pushData.index = 0;
+	pushData.metalness = 0.f;
+	for (float roughness = 0.f; roughness <= 1.0f; roughness += 0.09f) {
+		pushData.roughness = roughness;
+		for (float reflectance = 0.f; reflectance <= 1.f; reflectance += 0.09f) {
+			pushData.reflectance = reflectance;
+			vkCmdPushConstants(commandBuffer, rendercontext.mainPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT| VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushData), &pushData);
+			vkCmdDrawIndexed(commandBuffer, scene.meshes[0].indices.size(), 1, 0, 0, 0);
+
+			pushData.index++;
+		}
+	}
+
 	vkCmdEndRenderPass(commandBuffer);
 
 	vkEndCommandBuffer(commandBuffer);

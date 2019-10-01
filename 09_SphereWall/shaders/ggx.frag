@@ -7,6 +7,13 @@ layout(location = 2) in vec3 v_eyePosition;
 
 layout(location = 0) out vec4 outColor;
 
+layout(push_constant) uniform PushConstants {
+	float perceptual_roughness;
+	float reflectance;
+	float metallic;
+	int instanceIndex;
+};
+
 vec3 FresnelSchlick(vec3 f0, float cosTheta) {
 	return f0 + (vec3(1.0) - f0) * pow(1.0 - cosTheta, 5.0);
 }
@@ -128,14 +135,14 @@ void main()
 {	
 	// MATERIAU GENERIQUE
 	// doit etre parametre en tant que variables uniformes
-	const float metallic = 0.0;					// surface metallique ou pas ?
+	//const float metallic = 0.0;					// surface metallique ou pas ?
 	
 	// Cdiff : couleur sRGB car issue d'un color picker
 	const vec3 Cdiff = vec3(219, 37, 110) * 1.0/255.0; 
 	vec3 albedo = pow(Cdiff, vec3(2.2)); // gamma->linear
 	
-	const float reflectance = 0.5;	// remplace f0 dans le cas isolant, ignore en metallic
-	const float perceptual_roughness = 0.5;		// controle la taille de la glossiness 
+	//const float reflectance = 0.5;	// remplace f0 dans le cas isolant, ignore en metallic
+	//const float perceptual_roughness = 0.5;		// controle la taille de la glossiness 
 
 	// LUMIERE : vecteur VERS la lumiere en repere main droite OpenGL (+Z vers nous)
 	//const vec3 LightPosition = vec3(-500.0, 0.0, 1000.0);
