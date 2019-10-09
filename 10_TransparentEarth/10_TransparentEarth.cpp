@@ -185,6 +185,7 @@ struct VulkanRenderContext
 	RenderSurface depthBuffer;
 
 	VkPipeline mainPipeline;
+	VkPipeline mainPipelineCullFront;
 	VkPipelineLayout mainPipelineLayout;
 };
 
@@ -240,7 +241,7 @@ bool RenderSurface::CreateSurface(VulkanRenderContext& rendercontext, int width,
 	imageInfo.format = format;
 	imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
 	imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-	imageInfo.usage = pixelformat < PIXFMT_DUMMY_ASPECT_DEPTH ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+	imageInfo.usage = usageFlags;
 	// | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
 	imageInfo.samples = (VkSampleCountFlagBits)1;//VK_SAMPLE_COUNT_1_BIT;
 	imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -286,7 +287,6 @@ bool RenderSurface::CreateSurface(VulkanRenderContext& rendercontext, int width,
 		viewInfo.subresourceRange.aspectMask = pixelformat < PIXFMT_DUMMY_ASPECT_DEPTH ? VK_IMAGE_ASPECT_COLOR_BIT : VK_IMAGE_ASPECT_DEPTH_BIT;
 		// todo: add swizzling here when required
 
-		VkImageView imageView;
 		if (vkCreateImageView(context.device, &viewInfo, nullptr, &view) != VK_SUCCESS) {
 			std::cout << "failed to create texture image view!" << std::endl;
 			return false;
@@ -332,7 +332,7 @@ bool Texture::Load(VulkanRenderContext& rendercontext, const char* filepath, boo
 
 	void* data;
 	vkMapMemory(context.device, stagingBufferMemory, 0, imageSize, 0, &data);
-	memcpy(data, pixels, static_cast<size_t>(imageSize));
+	memcpy(data, pixels, imageSize);
 	vkUnmapMemory(context.device, stagingBufferMemory);
 	
 	stbi_image_free(pixels);
@@ -498,8 +498,8 @@ struct Scene
 	// Un DescriptorSet ne peut pas etre update ou utilise par un command buffer
 	// alors qu'il est "bind" par un autre command buffer
 	// On va donc avoir des descriptorSets par frame/command buffer
-	VkDescriptorSet descriptorSet[SceneMatrices::BufferType::MAX * 2];
-	VkDescriptorSetLayout descriptorSetLayout[SceneMatrices::BufferType::MAX];
+	VkDescriptorSet descriptorSet[(SceneMatrices::BufferType::MAX + 1/*texture*/) * 2];
+	VkDescriptorSetLayout descriptorSetLayout[SceneMatrices::BufferType::MAX + 1/*texture*/];
 	VkDescriptorPool descriptorPool;
 };
 
@@ -629,7 +629,7 @@ bool VulkanGraphicsApplication::Initialize()
 
 	VkApplicationInfo appInfo = {};
 	appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-	appInfo.pApplicationName = "09_SphereWall";
+	appInfo.pApplicationName = "10_TransparentEarth";
 	appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
 	appInfo.pEngineName = "todo engine";
 	appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
@@ -961,7 +961,7 @@ bool VulkanGraphicsApplication::Initialize()
 
 	VkPipelineRasterizationStateCreateInfo rasterizationInfo = {};
 	rasterizationInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-	rasterizationInfo.cullMode = VK_CULL_MODE_BACK_BIT;
+	rasterizationInfo.cullMode = VK_CULL_MODE_BACK_BIT;// NONE;			// pas de culling, ok ici car texture cut-out
 	rasterizationInfo.polygonMode = VK_POLYGON_MODE_FILL;
 	// l'objet est defini en CCW
 	rasterizationInfo.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
@@ -974,6 +974,13 @@ bool VulkanGraphicsApplication::Initialize()
 
 	VkPipelineColorBlendAttachmentState colorBlendAttachment = {};
 	colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+	colorBlendAttachment.blendEnable = true;
+	// blending en mode alpha pre-multiplie, nos valeurs RGB sont multipliees 
+	// par Alpha en sortie du shader
+	colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+	colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+	colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+	colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
 	VkPipelineColorBlendStateCreateInfo colorBlendInfo = {};
 	colorBlendInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
 	colorBlendInfo.attachmentCount = 1;
@@ -1036,7 +1043,7 @@ bool VulkanGraphicsApplication::Initialize()
 	VkDescriptorPoolCreateInfo descriptorPoolInfo = {};
 	descriptorPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
 	// on alloue strictement le minimum requis (l'ensemble du pool ici)
-	descriptorPoolInfo.maxSets = SceneMatrices::MAX * rendercontext.PENDING_FRAMES;
+	descriptorPoolInfo.maxSets = (SceneMatrices::MAX + 1) * rendercontext.PENDING_FRAMES;
 	descriptorPoolInfo.poolSizeCount = 2;
 	descriptorPoolInfo.pPoolSizes = poolSizes;
 	vkCreateDescriptorPool(context.device, &descriptorPoolInfo, nullptr, &scene.descriptorPool);
@@ -1052,7 +1059,7 @@ bool VulkanGraphicsApplication::Initialize()
 		VkPushConstantRange constantRange = { VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(glm::vec4) };
 		pipelineInfo.pPushConstantRanges = &constantRange;
 
-		pipelineInfo.setLayoutCount = 2;
+		pipelineInfo.setLayoutCount = 2+1;
 
 		// layout : on doit decrire le format de chaque descriptor (binding, type, stage)
 		VkDescriptorSetLayoutBinding sceneSetBindings[2 /*UBO*/ + 1 /*SAMPLER*/];
@@ -1060,13 +1067,13 @@ bool VulkanGraphicsApplication::Initialize()
 		sceneSetBindings[0] = { 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr };
 		// set 1
 		sceneSetBindings[1] = { 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr };
-		// todo
+		// set 2
 		sceneSetBindings[2] = { 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
 		//
 		VkDescriptorSetLayoutCreateInfo sceneSetInfo = {};
 		sceneSetInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
 		sceneSetInfo.bindingCount = 1;
-		for (int i = 0; i < SceneMatrices::MAX; i++) {
+		for (int i = 0; i < SceneMatrices::MAX + 1; i++) {
 			sceneSetInfo.pBindings = &sceneSetBindings[i];
 			vkCreateDescriptorSetLayout(context.device, &sceneSetInfo, nullptr, &scene.descriptorSetLayout[i]);
 		}
@@ -1074,12 +1081,11 @@ bool VulkanGraphicsApplication::Initialize()
 		VkDescriptorSetAllocateInfo allocateDescInfo = {};
 		allocateDescInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
 		allocateDescInfo.descriptorPool = scene.descriptorPool;
-		allocateDescInfo.descriptorSetCount = 2;
+		allocateDescInfo.descriptorSetCount = 3;
 		allocateDescInfo.pSetLayouts = scene.descriptorSetLayout;
-		// on cree deux descriptor sets a chaque fois car on double buffer (il faut donc allouer 2*N*sets)
-		// c'est sceneSet[currentFrame] qui devra etre utilise (bind) avec le pipeline correspondant
+		// on cree les descriptor sets en double buffer (il faut donc allouer 2*N sets)
 		for (int i = 0; i < rendercontext.PENDING_FRAMES; i++) {
-			vkAllocateDescriptorSets(context.device, &allocateDescInfo, &scene.descriptorSet[i * SceneMatrices::MAX]);
+			vkAllocateDescriptorSets(context.device, &allocateDescInfo, &scene.descriptorSet[i * (SceneMatrices::MAX + 1/*texture*/)]);
 		}
 		pipelineInfo.pSetLayouts = scene.descriptorSetLayout;
 
@@ -1089,8 +1095,15 @@ bool VulkanGraphicsApplication::Initialize()
 
 	gfxPipelineInfo.layout = rendercontext.mainPipelineLayout;
 
+	// pipeline cull back faces
 	vkCreateGraphicsPipelines(context.device, nullptr, 1, &gfxPipelineInfo
 		, nullptr, &rendercontext.mainPipeline);
+
+	// pipeline cull front faces
+	rasterizationInfo.cullMode = VK_CULL_MODE_FRONT_BIT;
+	gfxPipelineInfo.pRasterizationState = &rasterizationInfo;
+	vkCreateGraphicsPipelines(context.device, nullptr, 1, &gfxPipelineInfo
+		, nullptr, &rendercontext.mainPipelineCullFront);
 
 
 	vkDestroyShaderModule(context.device, fragShaderModule, nullptr);
@@ -1098,19 +1111,23 @@ bool VulkanGraphicsApplication::Initialize()
 
 	// Matrices world des instances
 	for (int x = -5; x <= 5; x++) {
-		scene.matrices.world[(x + 5)] = glm::translate(glm::mat4(1.f), glm::vec3((float)x, 0.f, 0.f));
+		scene.matrices.world[(x+5)] = glm::translate(glm::mat4(1.f), glm::vec3((float)0, 0.f, 0.f));
 	}
+
+
 
 	// par defaut la matrice lookAt de glm est main droite (repere OpenGL, +Z hors de l'ecran)
 	// le repere du monde et de la camera est donc main droite !
-	scene.matrices.view = glm::lookAt(glm::vec3(0.f, 0.f, 10.f), glm::vec3(0.f), glm::vec3(0.f, 1.f, 0.f));
+	scene.matrices.view = glm::lookAt(glm::vec3(0.f, 0.f, 2.f), glm::vec3(0.f), glm::vec3(0.f, 1.f, 0.f));
 	// par defaut la matrice perspective genere un cube NDC (NDC OpenGL = main gauche, Z[-1;+1] +Y vers le haut)
 	// le define "GLM_FORCE_DEPTH_ZERO_TO_ONE" permet de modifier les plans near et far NDC à [0;+1] 
 	// correspondant au NDC Vulkan (mais avec +Y vers le bas)
-	scene.matrices.projection = glm::perspective(45.f, context.swapchainExtent.width / (float)context.swapchainExtent.height, 1.f, 1000.f);
+	scene.matrices.projection = glm::perspective(glm::radians(45.f), context.swapchainExtent.width / (float)context.swapchainExtent.height, 1.f, 1000.f);
 	// NDC FIX +Y : Vulkan NDC = left handed & +Y down -> signifie que le winding doit etre clockwise contrairement a OpenGL (NDC Left Handed & +Y up)
 	// modele CCW : inverser NDC.Y (ici dans la matrice de projection) et definir le cullmode en COUNTER_CLOCKWISE 
 	scene.matrices.projection[1][1] *= -1.f;
+
+	scene.textures[0].Load(rendercontext, "ocean_mask.png", false);
 
 	// UBOs
 	memset(scene.matrices.constantBuffers, 0, sizeof(scene.matrices.constantBuffers));
@@ -1123,7 +1140,7 @@ bool VulkanGraphicsApplication::Initialize()
 	bufferInfo.pQueueFamilyIndices = queueFamilyIndices;
 	VkMemoryRequirements bufferMemReq;
 
-	size_t constantSizes[] = { 2 * sizeof(glm::mat4), 11 * 11 * sizeof(glm::mat4) };
+	size_t constantSizes[] = { 2 * sizeof(glm::mat4), 11 * sizeof(glm::mat4) };
 	char* matrixData = (char *)&scene.matrices.view;
 	for (int i = 0; i < SceneMatrices::MAX; i++)
 	{
@@ -1165,15 +1182,29 @@ bool VulkanGraphicsApplication::Initialize()
 		for (int i = 0; i < SceneMatrices::MAX; i++)
 		{
 			writeDescriptorSet[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-			writeDescriptorSet[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-			writeDescriptorSet[i].dstBinding = 0;
 			writeDescriptorSet[i].descriptorCount = 1;
+			writeDescriptorSet[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 			writeDescriptorSet[i].pBufferInfo = &sceneBufferInfo[i];
 			for (int fb = 0; fb < rendercontext.PENDING_FRAMES; fb++)
 			{
-				writeDescriptorSet[i].dstSet = scene.descriptorSet[i + fb * rendercontext.PENDING_FRAMES];
+				writeDescriptorSet[i].dstSet = scene.descriptorSet[i + fb * (SceneMatrices::MAX + 1/*texture*/)];
 				vkUpdateDescriptorSets(context.device, 1, &writeDescriptorSet[i], 0, nullptr);
 			}
+		}
+
+		VkDescriptorImageInfo sceneImageInfo[1] = {
+			{ scene.textures[0].sampler, scene.textures[0].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },		// binding 0
+		};
+		for (int fb = 0; fb < rendercontext.PENDING_FRAMES; fb++)
+		{
+			writeDescriptorSet[fb].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			writeDescriptorSet[fb].descriptorCount = 1;
+			writeDescriptorSet[fb].pBufferInfo = nullptr;
+			writeDescriptorSet[fb].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			writeDescriptorSet[fb].pImageInfo = &sceneImageInfo[0];
+			int texDescIndex = fb * (SceneMatrices::MAX + 1/*texture*/) + 2;
+			writeDescriptorSet[fb].dstSet = scene.descriptorSet[texDescIndex];
+			vkUpdateDescriptorSets(context.device, 1, &writeDescriptorSet[fb], 0, nullptr);
 		}
 	}
 
@@ -1238,10 +1269,6 @@ bool VulkanGraphicsApplication::Initialize()
 		DEBUG_CHECK_VK(vkFlushMappedMemoryRanges(context.device, 1, &mappedRange));
 	}
 
-
-	scene.textures[0].Load(rendercontext, "ocean_mask.png", false);
-
-
 	m_frame = 0;
 	m_currentFrame = 0;
 
@@ -1282,7 +1309,7 @@ bool VulkanGraphicsApplication::Shutdown()
 	}
 
 	// pipeline
-
+	vkDestroyPipeline(context.device, rendercontext.mainPipelineCullFront, nullptr);
 	vkDestroyPipeline(context.device, rendercontext.mainPipeline, nullptr);
 	vkDestroyPipelineLayout(context.device, rendercontext.mainPipelineLayout, nullptr);
 
@@ -1290,7 +1317,7 @@ bool VulkanGraphicsApplication::Shutdown()
 	//vkFreeDescriptorSets(context.device, sceneDescriptorPool, 2, sceneSet);
 	vkResetDescriptorPool(context.device, scene.descriptorPool, 0);
 
-	for (int i = 0; i < SceneMatrices::MAX; i++)
+	for (int i = 0; i < SceneMatrices::MAX + 1; i++)
 		vkDestroyDescriptorSetLayout(context.device, scene.descriptorSetLayout[i], nullptr);
 	vkDestroyDescriptorPool(context.device, scene.descriptorPool, nullptr);
 
@@ -1352,7 +1379,8 @@ bool VulkanGraphicsApplication::Update()
 
 	float time = (float)currentTime;
 
-	//scene.matrices.world = glm::rotate(glm::mat4(1.f), time, glm::vec3(0.f, 1.f, 0.f));
+	for (int i = 0; i < 10; i++)
+	scene.matrices.world[i] = glm::rotate(glm::mat4(1.f), time, glm::vec3(0.f, 1.f, 0.f));
 
 	return true;
 }
@@ -1389,6 +1417,12 @@ bool VulkanGraphicsApplication::Display()
 	memcpy(scene.matrices.constantBuffers[0/*m_currentFrame*/].data, &scene.matrices, sizeof(glm::mat4));
 	DEBUG_CHECK_VK(vkFlushMappedMemoryRanges(context.device, 1, &mappedRange));
 
+	mappedRange.memory = scene.matrices.constantBuffers[1].memory;
+	mappedRange.size = sizeof(glm::mat4);
+	memcpy(scene.matrices.constantBuffers[1/*m_currentFrame*/].data, &scene.matrices.world[0], sizeof(glm::mat4));
+	DEBUG_CHECK_VK(vkFlushMappedMemoryRanges(context.device, 1, &mappedRange));
+
+
 	VkSemaphore* acquireSem = &context.acquireSemaphores[m_currentFrame];
 	VkSemaphore* presentSem = &context.presentSemaphores[m_currentFrame];
 
@@ -1416,7 +1450,7 @@ bool VulkanGraphicsApplication::Display()
 	vkCmdBeginRenderPass(commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
 	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipeline);
-	vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipelineLayout, 0, 2, &scene.descriptorSet[2*m_currentFrame], 0, nullptr);
+	vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipelineLayout, 0, 3, &scene.descriptorSet[3*m_currentFrame], 0, nullptr);
 
 	
 	VkDeviceSize offsets[] = { 0 };
@@ -1438,14 +1472,21 @@ bool VulkanGraphicsApplication::Display()
 	pushData.metalness = 0.0f;
 	pushData.reflectance = 0.5f;
 
-	for (float x = 0.f; x < 1.1f; x += 0.1f) {
-		pushData.roughness = x;
+
+	//for (float x = 0.f; x < 1.1f; x += 0.1f) {
+	pushData.roughness = 0.1f;//x;
 
 		vkCmdPushConstants(commandBuffer, rendercontext.mainPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT| VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushData), &pushData);
+
+		// dessine les back faces en premier
+		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipelineCullFront);
+		vkCmdDrawIndexed(commandBuffer, scene.meshes[0].indices.size(), 1, 0, 0, 0);
+		// puis les front faces
+		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipeline);
 		vkCmdDrawIndexed(commandBuffer, scene.meshes[0].indices.size(), 1, 0, 0, 0);
 
-		pushData.index++;
-	}
+	//	pushData.index++;
+	//}
 
 	vkCmdEndRenderPass(commandBuffer);
 
@@ -1508,7 +1549,7 @@ int main(void)
 	VulkanGraphicsApplication app;
 
 	/* Create a windowed mode window and its OpenGL context */
-	app.window = glfwCreateWindow(800, 600, "09_SphereWall", NULL, NULL);
+	app.window = glfwCreateWindow(800, 600, "10_TransparentEarth", NULL, NULL);
 	if (!app.window)
 	{
 		glfwTerminate();

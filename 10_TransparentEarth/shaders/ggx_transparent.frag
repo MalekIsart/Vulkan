@@ -3,9 +3,12 @@
 
 layout(location = 0) in vec3 v_position;
 layout(location = 1) in vec3 v_normal;
-layout(location = 2) in vec3 v_eyePosition;
+layout(location = 2) in vec2 v_uv;
+layout(location = 3) in vec3 v_eyePosition;
 
 layout(location = 0) out vec4 outColor;
+
+layout(set = 2, binding = 0) uniform sampler2D u_cutoutTexture;
 
 layout(push_constant) uniform PushConstants {
 	float perceptual_roughness;			// controle la taille de la glossiness (de maniere perceptuellement lineaire)
@@ -136,8 +139,16 @@ void main()
 	// MATERIAU GENERIQUE
 
 	// Cdiff : couleur sRGB car issue d'un color picker
-	const vec3 Cdiff = vec3(219, 37, 110) * 1.0/255.0; 
+	vec3 Cdiff = vec3(219, 37, 110) * 1.0/255.0; 
+
+	vec4 texColor = texture(u_cutoutTexture, v_uv);
+	float alpha = texColor.r;						// canal red contient en fait l'alpha
+
 	vec3 albedo = pow(Cdiff, vec3(2.2)); // gamma->linear
+	
+	// premultiplication de l'albedo par l'alpha
+	// doit etre fait apres la linearisation
+	albedo *= alpha;
 
 	// LUMIERE : vecteur VERS la lumiere en repere main droite OpenGL (+Z vers nous)
 	//const vec3 LightPosition = vec3(-500.0, 0.0, 1000.0);
@@ -184,11 +195,11 @@ void main()
 	// couleur finale
 	//
 	// Ks figure implicitement dans CookTorrance (composante F)
-
+	
 	vec3 finalColor = Kd * diffuse + specular;
 	
 	// ne pas oublier la conversion linear->gamma si pas gere automatiquement
-    // finalColor = pow(finalColor, vec3(1.0/2.2));
+    finalColor = pow(finalColor, vec3(1.0/2.2));
 	
-	outColor = vec4(finalColor, 1.0);
+	outColor = vec4(finalColor, alpha);
 }

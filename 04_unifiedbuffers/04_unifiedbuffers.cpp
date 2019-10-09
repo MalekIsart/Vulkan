@@ -668,7 +668,7 @@ bool VulkanGraphicsApplication::Initialize()
 
 	scene.matrices.world = glm::mat4(1.f);
 	scene.matrices.view = glm::lookAt(glm::vec3(0.f, 0.f, 2.f), glm::vec3(0.f), glm::vec3(0.f, 1.f, 0.f));
-	scene.matrices.projection = glm::perspective(45.f, context.swapchainExtent.width / (float)context.swapchainExtent.height, 1.f, 1000.f);
+	scene.matrices.projection = glm::perspective(glm::radians(45.f), context.swapchainExtent.width / (float)context.swapchainExtent.height, 1.f, 1000.f);
 
 	// UBOs
 	memset(scene.matrices.constantBuffers, 0, sizeof(scene.matrices.constantBuffers));

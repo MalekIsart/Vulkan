@@ -632,7 +632,7 @@ bool VulkanGraphicsApplication::Display()
 	vkCmdBeginRenderPass(commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
 	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipeline);
-	float time = (float)currentTime;
+	float time = (float)0.f;//currentTime;
 	vkCmdPushConstants(commandBuffer, rendercontext.mainPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float), &time);
 	vkCmdDraw(commandBuffer, 3, 1, 0, 0);
 

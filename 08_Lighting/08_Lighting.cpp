@@ -627,7 +627,6 @@ bool VulkanGraphicsApplication::Initialize()
 			viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
 			// todo: add swizzling here when required
 
-			VkImageView imageView;
 			if (vkCreateImageView(context.device, &viewInfo, nullptr, &depthBuffer.view) != VK_SUCCESS) {
 				std::cout << "failed to create texture image view!" << std::endl;
 				return VK_NULL_HANDLE;
@@ -875,7 +874,7 @@ bool VulkanGraphicsApplication::Initialize()
 	// par defaut la matrice perspective genere un cube NDC (NDC OpenGL = main gauche, Z[-1;+1] +Y vers le haut)
 	// le define "GLM_FORCE_DEPTH_ZERO_TO_ONE" permet de modifier les plans near et far NDC à [0;+1] 
 	// correspondant au NDC Vulkan (mais avec +Y vers le bas)
-	scene.matrices.projection = glm::perspective(45.f, context.swapchainExtent.width / (float)context.swapchainExtent.height, 1.f, 1000.f);
+	scene.matrices.projection = glm::perspective(glm::radians(45.f), context.swapchainExtent.width / (float)context.swapchainExtent.height, 1.f, 1000.f);
 
 	// UBOs
 	memset(scene.matrices.constantBuffers, 0, sizeof(scene.matrices.constantBuffers));

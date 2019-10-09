@@ -217,8 +217,8 @@ struct Scene
 
 // 
 // Sphere procedurale par revolution avec une typologie TRIANGLE STRIP
-// le winding est CLOCKWISE (il faut inverser l'ordre des indices pour changer le winding)
-//
+// il faut inverser l'ordre des indices pour changer le winding (voir plus bas)
+// La sphere est ici definie en CCW
 void GenerateSphere(Mesh& mesh, int horizSegments, int vertiSegments, float sphereScale = 1.f)
 {
 	const float PI = 3.14159265359f;
@@ -236,11 +236,11 @@ void GenerateSphere(Mesh& mesh, int horizSegments, int vertiSegments, float sphe
 			float phi = xSegment * 2.0f * PI;
 			float xPos = std::cos(phi) * std::sin(theta);
 			float yPos = std::cos(theta);
-			float zPos = -std::sin(phi) * std::sin(theta);
+			float zPos = std::sin(phi) * std::sin(theta);
 			Vertex vtx{
 				glm::vec3(xPos*sphereScale, yPos*sphereScale, zPos*sphereScale),
 				glm::vec2(xSegment, ySegment),
-				glm::vec3(-xPos, -yPos, -zPos)
+				glm::vec3(xPos, yPos, zPos)
 			};
 			mesh.vertices.push_back(vtx);
 		}
@@ -253,6 +253,8 @@ void GenerateSphere(Mesh& mesh, int horizSegments, int vertiSegments, float sphe
 		{
 			for (int x = 0; x <= horizSegments; ++x)
 			{
+				// (y) suivi de (y+1) -> CW
+				// (y+1) suivi de (y) -> CCW
 				mesh.indices.push_back((y + 1) * (horizSegments + 1) + x);
 				mesh.indices.push_back(y       * (horizSegments + 1) + x);
 			}
@@ -261,6 +263,8 @@ void GenerateSphere(Mesh& mesh, int horizSegments, int vertiSegments, float sphe
 		{
 			for (int x = horizSegments; x >= 0; --x)
 			{
+				// (y+1) suivi de (y) -> CW
+				// (y) suivi de (y+1) -> CCW
 				mesh.indices.push_back(y       * (horizSegments + 1) + x);
 				mesh.indices.push_back((y + 1) * (horizSegments + 1) + x);
 			}
@@ -593,9 +597,10 @@ bool VulkanGraphicsApplication::Initialize()
 			viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
 			viewInfo.format = depthBuffer.format;
 			viewInfo.subresourceRange = rendercontext.mainSubRange;
+			// on cree un depth buffer, l'IMAGE_ASPECT doit correspondre
+			viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
 			// todo: add swizzling here when required
 
-			VkImageView imageView;
 			if (vkCreateImageView(context.device, &viewInfo, nullptr, &depthBuffer.view) != VK_SUCCESS) {
 				std::cout << "failed to create texture image view!" << std::endl;
 				return VK_NULL_HANDLE;
@@ -843,8 +848,12 @@ bool VulkanGraphicsApplication::Initialize()
 	// par defaut la matrice perspective genere un cube NDC (NDC OpenGL = main gauche, Z[-1;+1] +Y vers le haut)
 	// le define "GLM_FORCE_DEPTH_ZERO_TO_ONE" permet de modifier les plans near et far NDC à [0;+1] 
 	// correspondant au NDC Vulkan (mais avec +Y vers le bas)
-	scene.matrices.projection = glm::perspective(45.f, context.swapchainExtent.width / (float)context.swapchainExtent.height, 1.f, 1000.f);
-
+	scene.matrices.projection = glm::perspective(glm::radians(45.f), context.swapchainExtent.width / (float)context.swapchainExtent.height, 1.f, 1000.f);
+	// de ce fait l'objet s'affiche orienté vers le bas
+	// l'objet est defini en CCW avec +Y vers le haut mais Vulkan est configuré en CW et +Y vers le bas
+	// ce qui inverse implicitement le winding de notre obje
+	// une facon plus logique de proceder serait de configurer Vulkan en CCW et corriger le +Y avec la ligne suivante
+	//scene.matrices.projection[1][1] *= -1.f;
 	// UBOs
 	memset(scene.matrices.constantBuffers, 0, sizeof(scene.matrices.constantBuffers));
 

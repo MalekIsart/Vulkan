@@ -636,7 +636,6 @@ bool VulkanGraphicsApplication::Initialize()
 			viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
 			// todo: add swizzling here when required
 
-			VkImageView imageView;
 			if (vkCreateImageView(context.device, &viewInfo, nullptr, &depthBuffer.view) != VK_SUCCESS) {
 				std::cout << "failed to create texture image view!" << std::endl;
 				return VK_NULL_HANDLE;
@@ -890,11 +889,11 @@ bool VulkanGraphicsApplication::Initialize()
 
 	// par defaut la matrice lookAt de glm est main droite (repere OpenGL, +Z hors de l'ecran)
 	// le repere du monde et de la camera est donc main droite !
-	scene.matrices.view = glm::lookAt(glm::vec3(0.f, 0.f, 10.f), glm::vec3(0.f), glm::vec3(0.f, 1.f, 0.f));
+	scene.matrices.view = glm::lookAt(glm::vec3(0.f, 0.f, 14.f), glm::vec3(0.f), glm::vec3(0.f, 1.f, 0.f));
 	// par defaut la matrice perspective genere un cube NDC (NDC OpenGL = main gauche, Z[-1;+1] +Y vers le haut)
 	// le define "GLM_FORCE_DEPTH_ZERO_TO_ONE" permet de modifier les plans near et far NDC à [0;+1] 
 	// correspondant au NDC Vulkan (mais avec +Y vers le bas)
-	scene.matrices.projection = glm::perspective(45.f, context.swapchainExtent.width / (float)context.swapchainExtent.height, 1.f, 1000.f);
+	scene.matrices.projection = glm::perspective(glm::radians(45.f), context.swapchainExtent.width / (float)context.swapchainExtent.height, 1.f, 1000.f);
 	// NDC FIX +Y : Vulkan NDC = left handed & +Y down -> signifie que le winding doit etre clockwise contrairement a OpenGL (NDC Left Handed & +Y up)
 	// modele CCW : inverser NDC.Y (ici dans la matrice de projection) et definir le cullmode en COUNTER_CLOCKWISE 
 	scene.matrices.projection[1][1] *= -1.f;

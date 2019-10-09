@@ -9,7 +9,8 @@ layout(location = 2) in vec3 a_normal;
 
 layout(location = 0) out vec3 v_position;
 layout(location = 1) out vec3 v_normal;
-layout(location = 2) out vec3 v_eyePosition;
+layout(location = 2) out vec2 v_uv;
+layout(location = 3) out vec3 v_eyePosition;
 
 layout(set = 0, binding = 0) uniform Matrices
 {
@@ -38,6 +39,7 @@ void main()
 	vec3 normalWS = normalMatrix * a_normal;
 	v_position = vec3(positionWS);
 	v_normal = normalize(normalWS);
+	v_uv = a_uv;
 	v_eyePosition = -vec3(viewMatrix[3]); 
 
 	gl_Position = projectionMatrix * viewMatrix * positionWS;
