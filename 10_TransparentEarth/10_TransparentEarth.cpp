@@ -184,8 +184,10 @@ struct VulkanRenderContext
 	
 	RenderSurface depthBuffer;
 
-	VkPipeline mainPipeline;
-	VkPipeline mainPipelineCullFront;
+	VkPipeline mainPipelineOpaque;
+	VkPipeline mainPipelineCutOut;
+	VkPipeline mainPipelineTransparent;
+	VkPipeline mainPipelineTransparentCullFront;
 	VkPipelineLayout mainPipelineLayout;
 };
 
@@ -974,10 +976,10 @@ bool VulkanGraphicsApplication::Initialize()
 
 	VkPipelineColorBlendAttachmentState colorBlendAttachment = {};
 	colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-	colorBlendAttachment.blendEnable = true;
-	// blending en mode alpha pre-multiplie, nos valeurs RGB sont multipliees 
-	// par Alpha en sortie du shader
-	colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+	colorBlendAttachment.blendEnable = false;
+	// blending en mode alpha pre-multiplie, cela ressemble a de l'additif mais implique que 
+	// nos valeurs RGB sont multipliees par Alpha en sortie du shader
+	colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;//SRC_ALPHA;
 	colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
 	colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
 	colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
@@ -1094,19 +1096,58 @@ bool VulkanGraphicsApplication::Initialize()
 
 
 	gfxPipelineInfo.layout = rendercontext.mainPipelineLayout;
-
-	// pipeline cull back faces
+	//
+	// pipeline opaque
+	//
 	vkCreateGraphicsPipelines(context.device, nullptr, 1, &gfxPipelineInfo
-		, nullptr, &rendercontext.mainPipeline);
+		, nullptr, &rendercontext.mainPipelineOpaque);	
+	vkDestroyShaderModule(context.device, fragShaderModule, nullptr);
+
+	//
+	// pipelines non-opaque
+	//
+	// pipeline cutout
+	fragShaderCode.clear();
+	fragShaderCode = readFile("shaders/mesh.cutout.frag.spv");
+	fragShaderModule = context.createShaderModule(fragShaderCode);
+	shaderStages[1].module = fragShaderModule;
+	gfxPipelineInfo.pStages = shaderStages;
+	rasterizationInfo.cullMode = VK_CULL_MODE_NONE;
+	gfxPipelineInfo.pRasterizationState = &rasterizationInfo;
+	vkCreateGraphicsPipelines(context.device, nullptr, 1, &gfxPipelineInfo
+		, nullptr, &rendercontext.mainPipelineCutOut);
+	vkDestroyShaderModule(context.device, fragShaderModule, nullptr);
+	
+	// pipelines transparents
+	// Desactive l'ecriture dans le depth buffer et active le blending
+	// si l'on souhaite ecrire les pixels opaques dans le depth buffer il faut
+	// qu'un rendu en cutout precede le rendu transparent
+	depthStencilInfo.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+	depthStencilInfo.depthWriteEnable = VK_FALSE;
+	gfxPipelineInfo.pDepthStencilState = &depthStencilInfo;
+	colorBlendAttachment.blendEnable = true;
+	colorBlendInfo.pAttachments = &colorBlendAttachment;
+	gfxPipelineInfo.pColorBlendState = &colorBlendInfo;
+	
+	fragShaderCode.clear();
+	fragShaderCode = readFile("shaders/mesh.transparent.frag.spv");
+	fragShaderModule = context.createShaderModule(fragShaderCode);
+	shaderStages[1].module = fragShaderModule;
+	gfxPipelineInfo.pStages = shaderStages;
+	// pipeline cull back faces
+	rasterizationInfo.cullMode = VK_CULL_MODE_BACK_BIT;
+	gfxPipelineInfo.pRasterizationState = &rasterizationInfo;
+	vkCreateGraphicsPipelines(context.device, nullptr, 1, &gfxPipelineInfo
+		, nullptr, &rendercontext.mainPipelineTransparent);
 
 	// pipeline cull front faces
 	rasterizationInfo.cullMode = VK_CULL_MODE_FRONT_BIT;
 	gfxPipelineInfo.pRasterizationState = &rasterizationInfo;
 	vkCreateGraphicsPipelines(context.device, nullptr, 1, &gfxPipelineInfo
-		, nullptr, &rendercontext.mainPipelineCullFront);
-
+		, nullptr, &rendercontext.mainPipelineTransparentCullFront);
 
 	vkDestroyShaderModule(context.device, fragShaderModule, nullptr);
+
 	vkDestroyShaderModule(context.device, vertShaderModule, nullptr);
 
 	// Matrices world des instances
@@ -1309,8 +1350,10 @@ bool VulkanGraphicsApplication::Shutdown()
 	}
 
 	// pipeline
-	vkDestroyPipeline(context.device, rendercontext.mainPipelineCullFront, nullptr);
-	vkDestroyPipeline(context.device, rendercontext.mainPipeline, nullptr);
+	vkDestroyPipeline(context.device, rendercontext.mainPipelineTransparentCullFront, nullptr);
+	vkDestroyPipeline(context.device, rendercontext.mainPipelineTransparent, nullptr);
+	vkDestroyPipeline(context.device, rendercontext.mainPipelineCutOut, nullptr);
+	vkDestroyPipeline(context.device, rendercontext.mainPipelineOpaque, nullptr);
 	vkDestroyPipelineLayout(context.device, rendercontext.mainPipelineLayout, nullptr);
 
 	// double buffer, mais vkFree pas utile ici car la destruction est automatique
@@ -1449,7 +1492,6 @@ bool VulkanGraphicsApplication::Display()
 	renderPassBeginInfo.pClearValues = clearValues;
 	vkCmdBeginRenderPass(commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipeline);
 	vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipelineLayout, 0, 3, &scene.descriptorSet[3*m_currentFrame], 0, nullptr);
 
 	
@@ -1478,13 +1520,19 @@ bool VulkanGraphicsApplication::Display()
 
 		vkCmdPushConstants(commandBuffer, rendercontext.mainPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT| VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushData), &pushData);
 
+		// "Passe" Opaque & cutout
+		// dessine en cutout afin que les parties opaques figurent bien dans le depth buffer
+		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipelineCutOut);
+		vkCmdDrawIndexed(commandBuffer, scene.meshes[0].indices.size(), 1, 0, 0, 0);
+		
+		// "Passe" Transparent
 		// dessine les back faces en premier
-		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipelineCullFront);
+		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipelineTransparentCullFront);
 		vkCmdDrawIndexed(commandBuffer, scene.meshes[0].indices.size(), 1, 0, 0, 0);
 		// puis les front faces
-		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipeline);
+		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipelineTransparent);
 		vkCmdDrawIndexed(commandBuffer, scene.meshes[0].indices.size(), 1, 0, 0, 0);
-
+		
 	//	pushData.index++;
 	//}
 

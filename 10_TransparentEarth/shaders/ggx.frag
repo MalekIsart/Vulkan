@@ -91,14 +91,11 @@ void main()
 	vec3 Cdiff = vec3(219, 37, 110) * 1.0/255.0; 
 
 	vec4 texColor = texture(u_cutoutTexture, v_uv);
-	float alpha = texColor.r;						// canal red contient en fait l'alpha
-
+	float alpha = texColor.r;						// canal r&g&b contient en fait l'opacite
+	
 	vec3 albedo = pow(Cdiff, vec3(2.2)); // gamma->linear
 	
 	// premultiplication de l'albedo par l'alpha
-	// doit etre fait apres la linearisation
-	// si blendSrc==ONE on ajoute de la lumiere sans tenir compte de l'opacite / coverage
-	// en premultipliant notre albedo par alpha on laisse passer la lumiere en fonction du coverage
 	albedo *= alpha;
 
 	// LUMIERE : vecteur VERS la lumiere en repere main droite OpenGL (+Z vers nous)

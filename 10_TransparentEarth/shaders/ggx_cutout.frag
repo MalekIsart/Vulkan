@@ -92,14 +92,17 @@ void main()
 
 	vec4 texColor = texture(u_cutoutTexture, v_uv);
 	float alpha = texColor.r;						// canal red contient en fait l'alpha
-
+	// seuls les texels opaques peuvent produire un pixel opaque
+	// conditionne egalement l'ecriture dans le depth buffer
+	if (alpha < 0.5)
+		discard;
+	
 	vec3 albedo = pow(Cdiff, vec3(2.2)); // gamma->linear
 	
 	// premultiplication de l'albedo par l'alpha
 	// doit etre fait apres la linearisation
-	// si blendSrc==ONE on ajoute de la lumiere sans tenir compte de l'opacite / coverage
-	// en premultipliant notre albedo par alpha on laisse passer la lumiere en fonction du coverage
-	albedo *= alpha;
+	// techniquement pas utile dans le cas binaire
+	//albedo *= alpha;
 
 	// LUMIERE : vecteur VERS la lumiere en repere main droite OpenGL (+Z vers nous)
 	//const vec3 LightPosition = vec3(-500.0, 0.0, 1000.0);
@@ -152,5 +155,6 @@ void main()
 	// ne pas oublier la conversion linear->gamma si pas gere automatiquement
     finalColor = pow(finalColor, vec3(1.0/2.2));
 	
+	// si alpha vaut 1.0 on perd les details lorsque l'intensite
 	outColor = vec4(finalColor, alpha);
 }
