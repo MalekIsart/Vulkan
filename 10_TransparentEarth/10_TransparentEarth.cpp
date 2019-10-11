@@ -75,6 +75,8 @@ enum PixelFormat
 {
 	PIXFMT_RGBA8,
 	PIXFMT_SRGBA8,
+	PIXFMT_RGBA16F,
+	PIXFMT_RGBA32F,
 	PIXFMT_DUMMY_ASPECT_DEPTH,
 	PIXFMT_DEPTH32F = PIXFMT_DUMMY_ASPECT_DEPTH,
 	MAX
@@ -163,6 +165,18 @@ struct VulkanDeviceContext
 	}
 };
 
+struct Buffer
+{
+	VkBuffer buffer;
+	VkDeviceMemory memory;
+	VkDeviceSize size;
+	void* data;	// != nullptr => persistent
+				// optionnels
+	VkDeviceSize offset;
+	VkBufferUsageFlags usage;
+	VkMemoryPropertyFlags properties;
+};
+
 struct VulkanRenderContext
 {
 	static const int PENDING_FRAMES = 2;
@@ -181,26 +195,19 @@ struct VulkanRenderContext
 	VkRenderPass renderPass;
 
 	VkImageSubresourceRange mainSubRange;
-	
+
+	Buffer stagingBuffer;
+
 	RenderSurface depthBuffer;
 
 	VkPipeline mainPipelineOpaque;
 	VkPipeline mainPipelineCutOut;
 	VkPipeline mainPipelineTransparent;
 	VkPipeline mainPipelineTransparentCullFront;
-	VkPipelineLayout mainPipelineLayout;
-};
 
-struct Buffer
-{
-	VkBuffer buffer;
-	VkDeviceMemory memory;
-	VkDeviceSize size;
-	void* data;	// != nullptr => persistent
-				// optionnels
-	VkDeviceSize offset;
-	VkBufferUsageFlags usage;
-	VkMemoryPropertyFlags properties;
+	VkPipeline mainPipelineEnvMap;
+
+	VkPipelineLayout mainPipelineLayout;
 };
 
 
@@ -213,6 +220,8 @@ bool RenderSurface::CreateSurface(VulkanRenderContext& rendercontext, int width,
 	switch (pixelformat)
 	{
 	case PIXFMT_DEPTH32F: format = VK_FORMAT_D32_SFLOAT; break; // 32 bit signed float
+	case PIXFMT_RGBA32F: format = VK_FORMAT_R32G32B32A32_SFLOAT; break;
+	case PIXFMT_RGBA16F: format = VK_FORMAT_R16G16B16A16_SFLOAT; break;
 	case PIXFMT_SRGBA8: format = VK_FORMAT_R8G8B8A8_SRGB; break;
 	case PIXFMT_RGBA8:
 	default: format = VK_FORMAT_R8G8B8A8_UNORM; break;
@@ -309,37 +318,36 @@ void RenderSurface::Destroy(VulkanRenderContext& rendercontext)
 bool Texture::Load(VulkanRenderContext& rendercontext, const char* filepath, bool sRGB)
 {
 	VulkanDeviceContext& context = *rendercontext.context;
-	// pour des raisons de simplicite on force en RGBA quel que ce soit le format d'origine
+	Buffer& stagingBuffer = rendercontext.stagingBuffer;
+
 	int w, h, c;
-	uint8_t* pixels = stbi_load(filepath, &w, &h, &c, STBI_rgb_alpha);
-	uint32_t imageSize = w*h * 4;
-	VkBuffer stagingBuffer;
-	VkDeviceMemory stagingBufferMemory;
+	uint32_t imageSize = 0;
+	uint8_t* pixels = nullptr;
+	PixelFormat pixelFormat = PIXFMT_RGBA8;
+	if (!stbi_is_hdr(filepath))
+	{
+		// pour des raisons de simplicite on force en RGBA quel que ce soit le format d'origine
+		pixels = stbi_load(filepath, &w, &h, &c, STBI_rgb_alpha);
+		imageSize = w * h * c;
+		pixelFormat = sRGB ? PIXFMT_SRGBA8 : PIXFMT_RGBA8;
+	}
+	else
+	{
+		// pour des raisons de simplicite on force en RGBA quel que ce soit le format d'origine
+		pixels = (uint8_t*)stbi_loadf(filepath, &w, &h, &c, STBI_rgb_alpha);
+		imageSize = w * h * c * sizeof(float);
+		pixelFormat = PIXFMT_RGBA32F;
+	}
 
-	//createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, , stagingBuffer, stagingBufferMemory);
-	VkBufferCreateInfo bufferInfo = {};
-	bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-	bufferInfo.size = imageSize;
-	bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-	DEBUG_CHECK_VK(vkCreateBuffer(context.device, &bufferInfo, nullptr, &stagingBuffer));
+	if (pixels == nullptr) {
+		return false;
+	}
 
-	VkMemoryRequirements memRequirements;
-	vkGetBufferMemoryRequirements(context.device, stagingBuffer, &memRequirements);
-	VkMemoryAllocateInfo allocInfo = {};
-	allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-	allocInfo.allocationSize = memRequirements.size;
-	allocInfo.memoryTypeIndex = context.findMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-	DEBUG_CHECK_VK(vkAllocateMemory(context.device, &allocInfo, nullptr, &stagingBufferMemory));
-	vkBindBufferMemory(context.device, stagingBuffer, stagingBufferMemory, 0);
-
-	void* data;
-	vkMapMemory(context.device, stagingBufferMemory, 0, imageSize, 0, &data);
-	memcpy(data, pixels, imageSize);
-	vkUnmapMemory(context.device, stagingBufferMemory);
+	memcpy(stagingBuffer.data, pixels, imageSize);
 	
 	stbi_image_free(pixels);
 
-	RenderSurface::CreateSurface(rendercontext, w, h, sRGB ? PIXFMT_SRGBA8 : PIXFMT_RGBA8);
+	RenderSurface::CreateSurface(rendercontext, w, h, pixelFormat);
 
 	VkSamplerCreateInfo samplerInfo = {};
 	samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -405,7 +413,7 @@ bool Texture::Load(VulkanRenderContext& rendercontext, const char* filepath, boo
 	region.imageSubresource.layerCount = 1;
 	region.imageOffset = { 0, 0, 0 };
 	region.imageExtent = { (uint32_t)w, (uint32_t)h, 1 };
-	vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+	vkCmdCopyBufferToImage(commandBuffer, stagingBuffer.buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
 	barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 	barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -429,10 +437,6 @@ bool Texture::Load(VulkanRenderContext& rendercontext, const char* filepath, boo
 	vkQueueWaitIdle(rendercontext.graphicsQueue);
 
 	vkFreeCommandBuffers(context.device, rendercontext.mainCommandPool, 1, &commandBuffer);
-
-	vkDestroyBuffer(context.device, stagingBuffer, nullptr);
-	vkFreeMemory(context.device, stagingBufferMemory, nullptr);
-
 
 	return true;
 }
@@ -459,7 +463,7 @@ struct SceneMatrices
 	glm::mat4 projection;
 	
 	// Instance data
-	glm::mat4 world[11*11];
+	glm::mat4 world;
 
 	Buffer constantBuffers[BufferType::MAX]; // double buffer pas obligatoire ici
 };
@@ -494,13 +498,13 @@ struct Scene
 	SceneMatrices matrices;
 	std::vector<Mesh> meshes;
 
-	Texture textures[1];
+	std::vector<Texture> textures;
 
 	// GPU scene
 	// Un DescriptorSet ne peut pas etre update ou utilise par un command buffer
 	// alors qu'il est "bind" par un autre command buffer
 	// On va donc avoir des descriptorSets par frame/command buffer
-	VkDescriptorSet descriptorSet[(SceneMatrices::BufferType::MAX + 1/*texture*/) * 2];
+	VkDescriptorSet descriptorSet[(SceneMatrices::BufferType::MAX + 2/*textures*/) * 2];
 	VkDescriptorSetLayout descriptorSetLayout[SceneMatrices::BufferType::MAX + 1/*texture*/];
 	VkDescriptorPool descriptorPool;
 };
@@ -922,7 +926,94 @@ bool VulkanGraphicsApplication::Initialize()
 		vkCreateFramebuffer(context.device, &framebufferInfo, nullptr, &rendercontext.framebuffers[i]);
 	}
 
+	// On cree un staging buffer "global" pour charger un maximum de ressources (essentiellement statiques)
+	Buffer& stagingBuffer = rendercontext.stagingBuffer;
+	memset(&stagingBuffer, 0, sizeof(Buffer));
+	VkBufferCreateInfo bufferInfo = {};
+	bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+	bufferInfo.size = 4096 * 4096 * 4 * sizeof(float);	// maximum RGBA32F en 4k = 256Mio
+	bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+	stagingBuffer.size = bufferInfo.size;
+	stagingBuffer.usage = bufferInfo.usage;
+	DEBUG_CHECK_VK(vkCreateBuffer(context.device, &bufferInfo, nullptr, &stagingBuffer.buffer));
+	VkMemoryRequirements memRequirements;
+	vkGetBufferMemoryRequirements(context.device, stagingBuffer.buffer, &memRequirements);
+	VkMemoryAllocateInfo allocInfo = {};
+	allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+	allocInfo.allocationSize = memRequirements.size;
+	allocInfo.memoryTypeIndex = context.findMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+	DEBUG_CHECK_VK(vkAllocateMemory(context.device, &allocInfo, nullptr, &stagingBuffer.memory));
+	vkBindBufferMemory(context.device, stagingBuffer.buffer, stagingBuffer.memory, 0);
+	vkMapMemory(context.device, stagingBuffer.memory, 0, VK_WHOLE_SIZE, 0, &stagingBuffer.data);
+
+	//
+	// Descriptor Pool & layouts
+	//
+
+
+	VkDescriptorPoolSize poolSizes[2] = {
+		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, SceneMatrices::MAX * rendercontext.PENDING_FRAMES },
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * rendercontext.PENDING_FRAMES }
+	};
+	VkDescriptorPoolCreateInfo descriptorPoolInfo = {};
+	descriptorPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+	// on alloue strictement le minimum requis (l'ensemble du pool ici)
+	descriptorPoolInfo.maxSets = (SceneMatrices::MAX + 2) * rendercontext.PENDING_FRAMES;
+	descriptorPoolInfo.poolSizeCount = 2;
+	descriptorPoolInfo.pPoolSizes = poolSizes;
+	vkCreateDescriptorPool(context.device, &descriptorPoolInfo, nullptr, &scene.descriptorPool);
+
+	VkPipelineLayoutCreateInfo pipelineInfo = {};
+	pipelineInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+	{
+		pipelineInfo.pushConstantRangeCount = 1;
+		// les specs de Vulkan garantissent 128 octets de push constants
+		// voir properties.limits.maxPushConstantsSize
+		// dans les faits, la plupart des drivers/GPUs ne supportent pas
+		// autant d'octets de maniere optimum
+		VkPushConstantRange constantRange = { VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(glm::vec4) };
+		pipelineInfo.pPushConstantRanges = &constantRange;
+
+		pipelineInfo.setLayoutCount = 2 + 1;
+
+		// layout : on doit decrire le format de chaque descriptor (binding, type, array count, stage)
+		VkDescriptorSetLayoutBinding sceneSetBindings[2 /*UBO*/ + 2 /*SAMPLER*/];
+		// set 0
+		sceneSetBindings[0] = { 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr };
+		// set 1
+		sceneSetBindings[1] = { 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr };
+		// set 2
+		sceneSetBindings[2] = { 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
+		sceneSetBindings[3] = { 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
+		//
+		int sceneSetCount = SceneMatrices::MAX + 1;
+		int sceneSetBindingsCount[] = { 1, 1, 2 };
+		VkDescriptorSetLayoutCreateInfo sceneSetInfo = {};
+		sceneSetInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+		// ubos
+		for (int i = 0; i < sceneSetCount; i++) {
+			sceneSetInfo.bindingCount = sceneSetBindingsCount[i];
+			sceneSetInfo.pBindings = &sceneSetBindings[i];
+			vkCreateDescriptorSetLayout(context.device, &sceneSetInfo, nullptr, &scene.descriptorSetLayout[i]);
+		}
+
+		VkDescriptorSetAllocateInfo allocateDescInfo = {};
+		allocateDescInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+		allocateDescInfo.descriptorPool = scene.descriptorPool;
+		allocateDescInfo.descriptorSetCount = sceneSetCount;
+		allocateDescInfo.pSetLayouts = scene.descriptorSetLayout;
+		// on cree les descriptor sets en double buffer (il faut donc allouer 2*N sets)
+		for (int i = 0; i < rendercontext.PENDING_FRAMES; i++) {
+			vkAllocateDescriptorSets(context.device, &allocateDescInfo, &scene.descriptorSet[i * sceneSetCount]);
+		}
+		pipelineInfo.pSetLayouts = scene.descriptorSetLayout;
+
+		vkCreatePipelineLayout(context.device, &pipelineInfo, nullptr, &rendercontext.mainPipelineLayout);
+	}
+
+	//
 	// Pipeline
+	//
 
 	auto vertShaderCode = readFile("shaders/mesh.vert.spv");
 	auto fragShaderCode = readFile("shaders/mesh.frag.spv");
@@ -936,7 +1027,7 @@ bool VulkanGraphicsApplication::Initialize()
 	depthStencilInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
 	depthStencilInfo.depthTestEnable = VK_TRUE;
 	depthStencilInfo.depthWriteEnable = VK_TRUE;
-	depthStencilInfo.depthCompareOp = VK_COMPARE_OP_LESS;//_OR_EQUAL;
+	depthStencilInfo.depthCompareOp = VK_COMPARE_OP_LESS;
 
 	VkPipelineInputAssemblyStateCreateInfo inputAssemblyInfo = {};
 	inputAssemblyInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -963,7 +1054,7 @@ bool VulkanGraphicsApplication::Initialize()
 
 	VkPipelineRasterizationStateCreateInfo rasterizationInfo = {};
 	rasterizationInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-	rasterizationInfo.cullMode = VK_CULL_MODE_BACK_BIT;// NONE;			// pas de culling, ok ici car texture cut-out
+	rasterizationInfo.cullMode = VK_CULL_MODE_BACK_BIT;
 	rasterizationInfo.polygonMode = VK_POLYGON_MODE_FILL;
 	// l'objet est defini en CCW
 	rasterizationInfo.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
@@ -1036,66 +1127,8 @@ bool VulkanGraphicsApplication::Initialize()
 
 	gfxPipelineInfo.stageCount = 2;
 	gfxPipelineInfo.pStages = shaderStages;
-
-
-	VkDescriptorPoolSize poolSizes[2] = {
-		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, SceneMatrices::MAX * rendercontext.PENDING_FRAMES},
-		{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 * rendercontext.PENDING_FRAMES}
-	};
-	VkDescriptorPoolCreateInfo descriptorPoolInfo = {};
-	descriptorPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-	// on alloue strictement le minimum requis (l'ensemble du pool ici)
-	descriptorPoolInfo.maxSets = (SceneMatrices::MAX + 1) * rendercontext.PENDING_FRAMES;
-	descriptorPoolInfo.poolSizeCount = 2;
-	descriptorPoolInfo.pPoolSizes = poolSizes;
-	vkCreateDescriptorPool(context.device, &descriptorPoolInfo, nullptr, &scene.descriptorPool);
-
-	VkPipelineLayoutCreateInfo pipelineInfo = {};
-	pipelineInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-	{
-		pipelineInfo.pushConstantRangeCount = 1;
-		// les specs de Vulkan garantissent 128 octets de push constants
-		// voir properties.limits.maxPushConstantsSize
-		// dans les faits, la plupart des drivers/GPUs ne supportent pas
-		// autant d'octets de maniere optimum
-		VkPushConstantRange constantRange = { VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(glm::vec4) };
-		pipelineInfo.pPushConstantRanges = &constantRange;
-
-		pipelineInfo.setLayoutCount = 2+1;
-
-		// layout : on doit decrire le format de chaque descriptor (binding, type, stage)
-		VkDescriptorSetLayoutBinding sceneSetBindings[2 /*UBO*/ + 1 /*SAMPLER*/];
-		// set 0
-		sceneSetBindings[0] = { 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr };
-		// set 1
-		sceneSetBindings[1] = { 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr };
-		// set 2
-		sceneSetBindings[2] = { 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
-		//
-		VkDescriptorSetLayoutCreateInfo sceneSetInfo = {};
-		sceneSetInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-		sceneSetInfo.bindingCount = 1;
-		for (int i = 0; i < SceneMatrices::MAX + 1; i++) {
-			sceneSetInfo.pBindings = &sceneSetBindings[i];
-			vkCreateDescriptorSetLayout(context.device, &sceneSetInfo, nullptr, &scene.descriptorSetLayout[i]);
-		}
-
-		VkDescriptorSetAllocateInfo allocateDescInfo = {};
-		allocateDescInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-		allocateDescInfo.descriptorPool = scene.descriptorPool;
-		allocateDescInfo.descriptorSetCount = 3;
-		allocateDescInfo.pSetLayouts = scene.descriptorSetLayout;
-		// on cree les descriptor sets en double buffer (il faut donc allouer 2*N sets)
-		for (int i = 0; i < rendercontext.PENDING_FRAMES; i++) {
-			vkAllocateDescriptorSets(context.device, &allocateDescInfo, &scene.descriptorSet[i * (SceneMatrices::MAX + 1/*texture*/)]);
-		}
-		pipelineInfo.pSetLayouts = scene.descriptorSetLayout;
-
-		vkCreatePipelineLayout(context.device, &pipelineInfo, nullptr, &rendercontext.mainPipelineLayout);
-	}
-
-
 	gfxPipelineInfo.layout = rendercontext.mainPipelineLayout;
+
 	//
 	// pipeline opaque
 	//
@@ -1107,13 +1140,16 @@ bool VulkanGraphicsApplication::Initialize()
 	// pipelines non-opaque
 	//
 	// pipeline cutout
+	// comme optimisation, on peut n'ecrire que dans le depth buffer 
+	// (idealement il faudrait faire une subpass d'ecriture du depth avec 1 seule depth attachment)
+	colorBlendAttachment.colorWriteMask = 0;
+	colorBlendAttachment.blendEnable = false;
+	
 	fragShaderCode.clear();
 	fragShaderCode = readFile("shaders/mesh.cutout.frag.spv");
 	fragShaderModule = context.createShaderModule(fragShaderCode);
 	shaderStages[1].module = fragShaderModule;
-	gfxPipelineInfo.pStages = shaderStages;
 	rasterizationInfo.cullMode = VK_CULL_MODE_NONE;
-	gfxPipelineInfo.pRasterizationState = &rasterizationInfo;
 	vkCreateGraphicsPipelines(context.device, nullptr, 1, &gfxPipelineInfo
 		, nullptr, &rendercontext.mainPipelineCutOut);
 	vkDestroyShaderModule(context.device, fragShaderModule, nullptr);
@@ -1124,37 +1160,65 @@ bool VulkanGraphicsApplication::Initialize()
 	// qu'un rendu en cutout precede le rendu transparent
 	depthStencilInfo.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
 	depthStencilInfo.depthWriteEnable = VK_FALSE;
-	gfxPipelineInfo.pDepthStencilState = &depthStencilInfo;
 	colorBlendAttachment.blendEnable = true;
-	colorBlendInfo.pAttachments = &colorBlendAttachment;
-	gfxPipelineInfo.pColorBlendState = &colorBlendInfo;
+	colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
 	
 	fragShaderCode.clear();
 	fragShaderCode = readFile("shaders/mesh.transparent.frag.spv");
 	fragShaderModule = context.createShaderModule(fragShaderCode);
 	shaderStages[1].module = fragShaderModule;
-	gfxPipelineInfo.pStages = shaderStages;
 	// pipeline cull back faces
 	rasterizationInfo.cullMode = VK_CULL_MODE_BACK_BIT;
-	gfxPipelineInfo.pRasterizationState = &rasterizationInfo;
+	//gfxPipelineInfo.pRasterizationState = &rasterizationInfo;
 	vkCreateGraphicsPipelines(context.device, nullptr, 1, &gfxPipelineInfo
 		, nullptr, &rendercontext.mainPipelineTransparent);
 
 	// pipeline cull front faces
 	rasterizationInfo.cullMode = VK_CULL_MODE_FRONT_BIT;
-	gfxPipelineInfo.pRasterizationState = &rasterizationInfo;
+	//gfxPipelineInfo.pRasterizationState = &rasterizationInfo;
 	vkCreateGraphicsPipelines(context.device, nullptr, 1, &gfxPipelineInfo
 		, nullptr, &rendercontext.mainPipelineTransparentCullFront);
 
 	vkDestroyShaderModule(context.device, fragShaderModule, nullptr);
-
 	vkDestroyShaderModule(context.device, vertShaderModule, nullptr);
 
-	// Matrices world des instances
-	for (int x = -5; x <= 5; x++) {
-		scene.matrices.world[(x+5)] = glm::translate(glm::mat4(1.f), glm::vec3((float)0, 0.f, 0.f));
-	}
+	//
+	// environment map cubiques
+	//
 
+	depthStencilInfo.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+	depthStencilInfo.depthTestEnable = VK_TRUE;
+	depthStencilInfo.depthWriteEnable = VK_FALSE;
+	colorBlendAttachment.blendEnable = false;
+	//colorBlendInfo.pAttachments = &colorBlendAttachment;
+	
+	rasterizationInfo.cullMode = VK_CULL_MODE_NONE;
+	rasterizationInfo.frontFace = VK_FRONT_FACE_CLOCKWISE;
+	inputAssemblyInfo.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+	gfxPipelineInfo.pInputAssemblyState = &inputAssemblyInfo;
+	gfxPipelineInfo.pVertexInputState = nullptr;
+
+	vertShaderCode.clear();
+	vertShaderCode = readFile("shaders/quad.vert.spv");
+	vertShaderModule = context.createShaderModule(vertShaderCode);
+	shaderStages[0].module = vertShaderModule;
+	fragShaderCode.clear();
+	fragShaderCode = readFile("shaders/envmap.frag.spv");
+	fragShaderModule = context.createShaderModule(fragShaderCode);
+	shaderStages[1].module = fragShaderModule;
+	
+	vkCreateGraphicsPipelines(context.device, nullptr, 1, &gfxPipelineInfo
+		, nullptr, &rendercontext.mainPipelineEnvMap);
+
+	vkDestroyShaderModule(context.device, vertShaderModule, nullptr);
+	vkDestroyShaderModule(context.device, fragShaderModule, nullptr);
+
+
+
+	// Matrices world des instances
+	
+	scene.matrices.world = glm::translate(glm::mat4(1.f), glm::vec3((float)0, 0.f, 0.f));
+	
 
 
 	// par defaut la matrice lookAt de glm est main droite (repere OpenGL, +Z hors de l'ecran)
@@ -1168,12 +1232,16 @@ bool VulkanGraphicsApplication::Initialize()
 	// modele CCW : inverser NDC.Y (ici dans la matrice de projection) et definir le cullmode en COUNTER_CLOCKWISE 
 	scene.matrices.projection[1][1] *= -1.f;
 
+	scene.textures.resize(2);
 	scene.textures[0].Load(rendercontext, "ocean_mask.png", false);
+	// env map HDR lat-long
+	//scene.textures[1].Load(rendercontext, "../data/envmaps/pisa.hdr", false);
+	scene.textures[1].Load(rendercontext, "../data/envmaps/abandoned_games_room_02_1k.hdr", false);
+
 
 	// UBOs
 	memset(scene.matrices.constantBuffers, 0, sizeof(scene.matrices.constantBuffers));
 
-	VkBufferCreateInfo bufferInfo = {};
 	bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
 	bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
 	bufferInfo.queueFamilyIndexCount = 1;
@@ -1233,13 +1301,14 @@ bool VulkanGraphicsApplication::Initialize()
 			}
 		}
 
-		VkDescriptorImageInfo sceneImageInfo[1] = {
+		VkDescriptorImageInfo sceneImageInfo[2] = {
 			{ scene.textures[0].sampler, scene.textures[0].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },		// binding 0
+			{ scene.textures[1].sampler, scene.textures[1].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },		// binding 1
 		};
 		for (int fb = 0; fb < rendercontext.PENDING_FRAMES; fb++)
 		{
 			writeDescriptorSet[fb].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-			writeDescriptorSet[fb].descriptorCount = 1;
+			writeDescriptorSet[fb].descriptorCount = 2;
 			writeDescriptorSet[fb].pBufferInfo = nullptr;
 			writeDescriptorSet[fb].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 			writeDescriptorSet[fb].pImageInfo = &sceneImageInfo[0];
@@ -1325,7 +1394,8 @@ bool VulkanGraphicsApplication::Shutdown()
 
 	vkDeviceWaitIdle(context.device);
 
-	scene.textures[0].Destroy(rendercontext);
+	for (int i = 0; i < scene.textures.size(); i++)
+		scene.textures[i].Destroy(rendercontext);
 
 	// VBO / IBO
 	for (int i = 0; i < Mesh::BufferType::MAX; i++)
@@ -1349,12 +1419,19 @@ bool VulkanGraphicsApplication::Shutdown()
 		vkFreeMemory(context.device, scene.matrices.constantBuffers[i].memory, nullptr);
 	}
 
-	// pipeline
+	// pipelines
+	vkDestroyPipeline(context.device, rendercontext.mainPipelineEnvMap, nullptr);
 	vkDestroyPipeline(context.device, rendercontext.mainPipelineTransparentCullFront, nullptr);
 	vkDestroyPipeline(context.device, rendercontext.mainPipelineTransparent, nullptr);
 	vkDestroyPipeline(context.device, rendercontext.mainPipelineCutOut, nullptr);
 	vkDestroyPipeline(context.device, rendercontext.mainPipelineOpaque, nullptr);
 	vkDestroyPipelineLayout(context.device, rendercontext.mainPipelineLayout, nullptr);
+
+	// destruction du staging buffer
+	vkDestroyBuffer(context.device, rendercontext.stagingBuffer.buffer, nullptr);
+	vkUnmapMemory(context.device, rendercontext.stagingBuffer.memory);
+	vkFreeMemory(context.device, rendercontext.stagingBuffer.memory, nullptr);
+
 
 	// double buffer, mais vkFree pas utile ici car la destruction est automatique
 	//vkFreeDescriptorSets(context.device, sceneDescriptorPool, 2, sceneSet);
@@ -1422,8 +1499,7 @@ bool VulkanGraphicsApplication::Update()
 
 	float time = (float)currentTime;
 
-	for (int i = 0; i < 10; i++)
-	scene.matrices.world[i] = glm::rotate(glm::mat4(1.f), time, glm::vec3(0.f, 1.f, 0.f));
+	scene.matrices.world = glm::rotate(glm::mat4(1.f), time, glm::vec3(0.f, 1.f, 0.f));
 
 	return true;
 }
@@ -1438,6 +1514,7 @@ bool VulkanGraphicsApplication::Begin()
 	vkWaitForFences(context.device, 1, commandFence,
 		false, UINT64_MAX);
 	vkResetFences(context.device, 1, commandFence);
+	
 	vkResetCommandBuffer(rendercontext.mainCommandBuffers[m_currentFrame], VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT);
 
 	return true;
@@ -1462,7 +1539,7 @@ bool VulkanGraphicsApplication::Display()
 
 	mappedRange.memory = scene.matrices.constantBuffers[1].memory;
 	mappedRange.size = sizeof(glm::mat4);
-	memcpy(scene.matrices.constantBuffers[1/*m_currentFrame*/].data, &scene.matrices.world[0], sizeof(glm::mat4));
+	memcpy(scene.matrices.constantBuffers[1/*m_currentFrame*/].data, &scene.matrices.world, sizeof(glm::mat4));
 	DEBUG_CHECK_VK(vkFlushMappedMemoryRanges(context.device, 1, &mappedRange));
 
 
@@ -1510,31 +1587,40 @@ bool VulkanGraphicsApplication::Display()
 		float metalness;	
 		int index;
 	} pushData;
+
 	pushData.index = 0;
 	pushData.metalness = 0.0f;
 	pushData.reflectance = 0.5f;
+	pushData.roughness = 0.1f;
+	vkCmdPushConstants(commandBuffer, rendercontext.mainPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT| VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushData), &pushData);
 
-
-	//for (float x = 0.f; x < 1.1f; x += 0.1f) {
-	pushData.roughness = 0.1f;//x;
-
-		vkCmdPushConstants(commandBuffer, rendercontext.mainPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT| VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushData), &pushData);
-
-		// "Passe" Opaque & cutout
+	// "Passe" Opaques & Cutouts & Environnement
+	{
+		// opaque en premier (rien ici)
+		//vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipelineOpaque);
+		
 		// dessine en cutout afin que les parties opaques figurent bien dans le depth buffer
 		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipelineCutOut);
 		vkCmdDrawIndexed(commandBuffer, scene.meshes[0].indices.size(), 1, 0, 0, 0);
+
+		// env map (background) apres tout le reste
+		//vkCmdBindVertexBuffers(commandBuffer, 0, 0, nullptr, nullptr);
 		
-		// "Passe" Transparent
+		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipelineEnvMap);
+		vkCmdDraw(commandBuffer, 4, 1, 0, 0);
+	}
+	
+	// "Passe" Transparents, toujours en dernier
+	{
+		//vkCmdBindVertexBuffers(commandBuffer, 0, 1, buffers, offsets);
+
 		// dessine les back faces en premier
 		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipelineTransparentCullFront);
 		vkCmdDrawIndexed(commandBuffer, scene.meshes[0].indices.size(), 1, 0, 0, 0);
 		// puis les front faces
 		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, rendercontext.mainPipelineTransparent);
 		vkCmdDrawIndexed(commandBuffer, scene.meshes[0].indices.size(), 1, 0, 0, 0);
-		
-	//	pushData.index++;
-	//}
+	}
 
 	vkCmdEndRenderPass(commandBuffer);
 

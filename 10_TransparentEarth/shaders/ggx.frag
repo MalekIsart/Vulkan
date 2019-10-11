@@ -147,7 +147,7 @@ void main()
 	vec3 finalColor = Kd * diffuse + specular;
 	
 	// ne pas oublier la conversion linear->gamma si pas gere automatiquement
-    finalColor = pow(finalColor, vec3(1.0/2.2));
+    //finalColor = pow(finalColor, vec3(1.0/2.2));
 	
 	outColor = vec4(finalColor, alpha);
 }
